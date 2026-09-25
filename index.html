@@ -651,6 +651,21 @@ const MAPS = [
     auto: { ramps: 1, glides: 1, open: { n: 2, len: 0.035 }, pads: 5, boxes: 4, coins: 8, hazards: { type: 'geyser', n: 6 } },
     decor: 'volcano', weather: 'embers', clouds: 14, balloons: 0,
   },
+  {
+    id: 'otto', name: 'Autodromo 8', emoji: '🏟️', desc: 'Circuito notturno a otto: il ponte scavalca l’incrocio, rettilinei larghi al centro e punte strette.',
+    // lemniscata: x = A sen t, z = B sen t cos t; quota 6 + 6 cos t → all'incrocio (t = 0) si passa 12 m sopra (t = π)
+    cp: (() => { const out = []; for (let k = 0; k < 28; k++) { const t = Math.PI / 2 + k * Math.PI * 2 / 28, sn = Math.abs(Math.sin(t)); out.push([Math.round(330 * Math.sin(t)), Math.round((6 + 6 * Math.cos(t)) * 10) / 10, Math.round(230 * Math.sin(t) * Math.cos(t)), sn > 0.93 ? 9 : sn < 0.35 ? 17 : 12]); } return out; })(),
+    ts: 1, bpm: 152, key: 2, grip: 1, terrain: 'city', island: 1, islandPad: 220,
+    mounts: b => [],
+    sky: { top: 0x06122e, hor: 0x2c4a8a, low: [0.25, 0.3, 0.5], sun: [0.3, 0.6, 0.74], sunCol: 0xd8e2ff, sunI: 1.9, hemi: [0x9cb4ff, 0x3a4a66, 1.7], fog: [300, 1400], fogCol: 0x1c2a50, exposure: 1.3, env: 0.8, envGround: 0x404a60, bloom: [0.6, 0.5, 0.86], stars: 1, sunSize: 2500 },
+    water: { level: -3, kind: 'night', color: 0x0a1030 },
+    colors: { a: 0x2e3a4e, b: 0x3a4a64, edge: 0x46506a, sand: 0x2a3040, wet: 0x121628, rock: 0x3a3a48, snow: 0x3a3a48, rockH: 999, snowH: 999 },
+    road: { base: '#3e4150', edge: '#ffd000', center: 'rgba(255,255,255,.85)' }, curb: ['#ffd000', '#1a1a24'],
+    fence: { post: 0x1a1a26, cols: [0xffd000, 0x2f80ff], glow: true }, arch: 0x15151f, banner: ['#ffd000', '#2f80ff', '#ffffff'], roof: 0x2f80ff,
+    bridges: [[0.71, 0.79]],
+    auto: { ramps: 1, pads: 6, boxes: 4, coins: 9 },
+    decor: 'neon', weather: null, clouds: 0, balloons: 0,
+  },
 ];
 const mapById = id => MAPS.find(m => m.id === id) || MAPS[0];
 
@@ -663,6 +678,8 @@ let minX, maxX, minZ, maxZ, IC = new THREE.Vector2(), IRX = 1, IRZ = 1, LAKE = n
 let RAMPS = [];
 // larghezza variabile: XW[i] = mezza larghezza extra rispetto a HW (negativa nelle strettoie)
 let XW = new Float32Array(0), XWMAX = 0;
+// ponti: tratti sopraelevati (map.bridges) che passano sopra altre parti della pista; il terreno non li segue
+let BRIDGE = new Uint8Array(0), HAS_BRIDGE = false;
 const hw = i => HW + XW[i];
 // sposta una distanza laterale "standard" (misurata come se la strada fosse larga HW) sul bordo reale
 const edgeLat = (i, lat) => lat + Math.sign(lat) * XW[i];
@@ -713,6 +730,8 @@ function setupTrack(map) {
   const op = map.open || [];
   for (let i = 0; i < N; i++) { OPEN_L[i] = openSideAt(op, i / N, -1) ? 1 : 0; OPEN_R[i] = openSideAt(op, i / N, 1) ? 1 : 0; }
   LIQUID = !!(map.water && (map.water.kind === 'lava' || map.water.kind === 'water'));
+  BRIDGE = new Uint8Array(N); HAS_BRIDGE = !!(map.bridges && map.bridges.length);
+  if (HAS_BRIDGE) { const br = map.bridges.map(([a, b]) => [a, b, 0]); for (let i = 0; i < N; i++) BRIDGE[i] = openSideAt(br, i / N, 1) ? 1 : 0; }
 }
 // disposizione automatica e deterministica (uguale su tutti i client) di trampolini, pad, box, monete e pericoli
 function autoLayout(map) {
@@ -763,12 +782,12 @@ function autoLayout(map) {
   }
 }
 // punto di pista più vicino; d = distanza dal centro meno la larghezza extra (cioè riferita a una strada larga HW)
-function nearestGlobal(x, z, maxR) {
+function nearestGlobal(x, z, maxR, mode = 0) {
   const r = Math.ceil((maxR + XWMAX) / GC), cx = Math.floor(x / GC), cz = Math.floor(z / GC);
   let best = -1, bd = maxR;
   for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) {
     const arr = grid.get(gkey(cx + a, cz + b)); if (!arr) continue;
-    for (const i of arr) { const dx = x - P[i].x, dz = z - P[i].z, d = Math.sqrt(dx * dx + dz * dz) - XW[i]; if (d < bd) { bd = d; best = i; } }
+    for (const i of arr) { if (mode === 0 ? BRIDGE[i] : mode === 2 && !BRIDGE[i]) continue; const dx = x - P[i].x, dz = z - P[i].z, d = Math.sqrt(dx * dx + dz * dz) - XW[i]; if (d < bd) { bd = d; best = i; } }
   }
   return best < 0 ? null : { i: best, d: bd };
 }
@@ -808,6 +827,13 @@ function blendH(roadY, dist, x, z) {
 }
 // altezza del terreno visibile (stessa formula della mesh)
 function terrainY(x, z) {
+  const h = terrainBase(x, z);
+  if (!HAS_BRIDGE) return h;
+  const nb = nearestGlobal(x, z, WALL + 4, 2); if (!nb) return h;
+  const p = P[nb.i], ry = p.y + ((x - p.x) * T[nb.i].x + (z - p.z) * T[nb.i].z) * SLOPE[nb.i];
+  return Math.min(h, ry - 0.6);
+}
+function terrainBase(x, z) {
   const nr = nearestGlobal(x, z, BLEND[1] + 5);
   if (!nr) return naturalH(x, z);
   const p = P[nr.i]; const al = (x - p.x) * T[nr.i].x + (z - p.z) * T[nr.i].z;
@@ -819,15 +845,17 @@ function terrainY(x, z) {
 }
 
 const _gi = { idx: 0, lat: 0, h: 0, roadY: 0, al: 0 };
-function groundInfo(x, z, hint, out = _gi) {
+function groundInfo(x, z, hint, out = _gi, y = null) {
   let best = 0, bd = 1e18;
-  if (hint < 0) { for (let i = 0; i < N; i++) { const dx = x - P[i].x, dz = z - P[i].z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = i; } } }
+  if (hint < 0) { for (let i = 0; i < N; i++) { const dx = x - P[i].x, dz = z - P[i].z, dy = y == null ? 0 : (y - P[i].y) * 3, d = dx * dx + dz * dz + dy * dy; if (d < bd) { bd = d; best = i; } } }
   else for (let k = -30; k <= 30; k++) { const j = wrapI(hint + k); const dx = x - P[j].x, dz = z - P[j].z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = j; } }
   const p = P[best], sd = SD[best], t = T[best];
   const dx = x - p.x, dz = z - p.z;
   const lat = dx * sd.x + dz * sd.z, al = dx * t.x + dz * t.z;
   const roadY = p.y + al * SLOPE[best];
-  let h = blendH(roadY, Math.abs(lat) - XW[best], x, z) + openDrop(best, lat);
+  let h;
+  if (BRIDGE[best]) { const al2 = Math.abs(lat) - XW[best]; h = al2 < (isOpen(best, lat) ? HW + 2 : WALL + 1.2) ? roadY : terrainY(x, z); }
+  else h = blendH(roadY, Math.abs(lat) - XW[best], x, z) + openDrop(best, lat);
   let onRamp = null;
   for (const R of RAMPS) {
     let di = best - R.idx; if (di > N / 2) di -= N; if (di < -N / 2) di += N;
@@ -947,7 +975,7 @@ function IM(geo, mat, max, shadow = true) {
 function scatterArea(tries, clear, cb, spread = 1.05) {
   for (let t = 0; t < tries; t++) {
     const x = rand(IC.x - IRX * spread, IC.x + IRX * spread), z = rand(IC.y - IRZ * spread, IC.y + IRZ * spread);
-    if (nearestGlobal(x, z, clear)) continue;
+    if (nearestGlobal(x, z, clear, 1)) continue;
     if (cb(x, z, terrainY(x, z)) === false) return;
   }
 }
@@ -956,12 +984,12 @@ function scatterRoad(tries, latMin, latMax, cb) {
   for (let t = 0; t < tries; t++) {
     const i = Math.floor(rand(0, N)), s = Math.random() < 0.5 ? -1 : 1, lat = s * (rand(latMin, latMax) + XW[i]);
     const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat;
-    const nr = nearestGlobal(x, z, latMin); if (nr && nr.d < latMin - 0.01) continue;
+    const nr = nearestGlobal(x, z, latMin, 1); if (nr && nr.d < latMin - 0.01) continue;
     if (cb(x, z, terrainY(x, z), i, lat) === false) return;
   }
 }
 
-function ribbon(a, b, yOff, vLen, mat, yFn) {
+function ribbon(a, b, yOff, vLen, mat, yFn, mask) {
   const pos = [], uv = [], idx = [];
   const reps = Math.max(1, Math.round(LEN / vLen));
   for (let i = 0; i <= N; i++) {
@@ -971,7 +999,7 @@ function ribbon(a, b, yOff, vLen, mat, yFn) {
     const ya = yFn ? yFn(j, ea) : p.y, yb = yFn ? yFn(j, eb) : p.y;
     pos.push(p.x + s.x * ea, ya + yOff, p.z + s.z * ea, p.x + s.x * eb, yb + yOff, p.z + s.z * eb);
     const v = i / N * reps; uv.push(0, v, 1, v);
-    if (i < N) { const k = i * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
+    if (i < N && (!mask || (mask(j) && mask((j + 1) % N)))) { const k = i * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -980,12 +1008,12 @@ function ribbon(a, b, yOff, vLen, mat, yFn) {
   const m = new THREE.Mesh(g, mat); m.receiveShadow = true; world.add(m); return m;
 }
 // parete verticale sotto il bordo della sopraelevata
-function skirt(lat, mat) {
+function skirt(lat, mat, mask) {
   const pos = [], idx = [];
   for (let i = 0; i <= N; i++) {
     const j = i % N, p = P[j], s = SD[j], el = edgeLat(j, lat), x = p.x + s.x * el, z = p.z + s.z * el;
-    pos.push(x, p.y + 0.05, z, x, Math.min(p.y - 0.3, naturalH(x, z) - 1), z);
-    if (i < N) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+    pos.push(x, p.y + 0.05, z, x, Math.min(p.y - 0.3, (mask ? terrainBase(x, z) : naturalH(x, z)) - 1), z);
+    if (i < N && (!mask || (mask(j) && mask((j + 1) % N)))) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
   }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
   const m = new THREE.Mesh(g, mat); m.receiveShadow = true; m.castShadow = true; world.add(m); return m;
@@ -1055,6 +1083,21 @@ function updateWeather(dt) {
   W.pts.geometry.attributes.position.needsUpdate = true;
 }
 
+function buildBridges(M) {
+  const onB = j => BRIDGE[j] === 1;
+  const walk = new THREE.MeshStandardMaterial({ color: 0x8a8f99, roughness: 0.75 });
+  ribbon(HW + 1.9, WALL + 1.2, 0.05, 8, walk, null, onB); ribbon(-WALL - 1.2, -HW - 1.9, 0.05, 8, walk, null, onB);
+  const side = new THREE.MeshStandardMaterial({ color: 0x6d717a, roughness: 0.85, side: THREE.DoubleSide });
+  skirt(WALL + 1.2, side, onB); skirt(-WALL - 1.2, side, onB);
+  const pil = IM(new THREE.CylinderGeometry(1.2, 1.5, 1, 10).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x9aa0aa, roughness: 0.7 }), 300);
+  for (let i = 0; i < N; i += 10) {
+    if (!BRIDGE[i]) continue;
+    for (const lat of [-hw(i) + 2, hw(i) - 2]) {
+      const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, g0 = terrainBase(x, z);
+      if (P[i].y - g0 > 2.5 && !nearestGlobal(x, z, HW + 3)) pil.put(x, g0, z, 1, P[i].y - g0, 1); // niente piloni in mezzo alla strada di sotto
+    }
+  }
+}
 async function buildWorld() {
   const M = MAP, CO = M.colors;
   applyAtmosphere(M);
@@ -1065,6 +1108,7 @@ async function buildWorld() {
   const curbMat = glow ? new THREE.MeshStandardMaterial({ map: texCurb, emissive: 0xffffff, emissiveMap: texCurb, emissiveIntensity: 1.3, roughness: 0.5 }) : new THREE.MeshStandardMaterial({ map: texCurb, roughness: 0.6 });
   ribbon(HW, HW + 1.9, 0.1, 5, curbMat);
   ribbon(-HW - 1.9, -HW, 0.1, 5, curbMat);
+  if (HAS_BRIDGE) buildBridges(M);
   if (M.deck) {
     const texWalk = PM(canvasTex(128, 128, (g, w, h) => { g.fillStyle = '#4a4a5a'; g.fillRect(0, 0, w, h); g.strokeStyle = '#34343f'; g.lineWidth = 4; for (let k = 0; k <= 4; k++) { g.beginPath(); g.moveTo(0, k * 32); g.lineTo(w, k * 32); g.stroke(); g.beginPath(); g.moveTo(k * 32, 0); g.lineTo(k * 32, h); g.stroke(); } }));
     const walk = new THREE.MeshStandardMaterial({ map: texWalk, roughness: 0.7 });
@@ -1138,7 +1182,7 @@ async function buildWorld() {
   const posts = new THREE.InstancedMesh(postG, new THREE.MeshStandardMaterial({ color: M.fence.post, roughness: 0.6 }), segs.length * 2);
   const rails = new THREE.InstancedMesh(railG, glow ? new THREE.MeshBasicMaterial({ color: 0xffffff }) : new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }), segs.length * 4);
   let pi = 0, ri = 0; const red = new THREE.Color(M.fence.cols[0]), wht = new THREE.Color(M.fence.cols[1]);
-  const fenceP = (i, s) => { const lat = s * (WALL + 0.8 + XW[i]); const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat; return new THREE.Vector3(x, blendH(P[i].y, WALL + 0.8, x, z), z); };
+  const fenceP = (i, s) => { const lat = s * (WALL + 0.8 + XW[i]); const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat; return new THREE.Vector3(x, BRIDGE[i] ? P[i].y + 0.05 : blendH(P[i].y, WALL + 0.8, x, z), z); };
   for (const i of segs) for (const s of [-1, 1]) {
     if (isOpen(i, s)) continue;
     const a = fenceP(i, s), b = fenceP((i + 4) % N, s);
@@ -1330,7 +1374,7 @@ function decorNeon() {
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL), key = cx * 10000 + cz;
     if (occ.has(key)) return;
     const w = rand(12, 22), d = rand(12, 22);
-    if (nearestGlobal(x, z, WALL + 6 + Math.max(w, d) * 0.72)) return;
+    if (nearestGlobal(x, z, WALL + 6 + Math.max(w, d) * 0.72, 1)) return;
     const road = nearestGlobal(x, z, 260), dist = road ? road.d : 260;
     const tier = dist < 70 ? (Math.random() < 0.6 ? 0 : 1) : dist < 150 ? (Math.random() < 0.5 ? 1 : 2) : 2;
     const [h0, h1] = tiers[tier], hh = rand(h0, h1);
@@ -4506,7 +4550,7 @@ setInterval(() => {
     if (jc) { $('netCode').value = jc.toUpperCase(); show('online'); }
   } catch (e) { console.error(e); window.dispatchEvent(new ErrorEvent('error', { message: e.stack || String(e) })); }
 })();
-window.__game = { groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; } };
+window.__game = { groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; }, get BRIDGE() { return BRIDGE; } };
 </script>
 </body>
 </html>
