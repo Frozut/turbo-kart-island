@@ -60,6 +60,7 @@
   /* ---------- HUD ---------- */
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
   #itembox { position: absolute; left: 24px; top: 20px; width: 104px; height: 104px; border-radius: 22px; background: rgba(10,10,30,.45); border: 4px solid rgba(255,255,255,.85); box-shadow: 0 6px 20px rgba(0,0,0,.35), inset 0 0 20px rgba(255,255,255,.15); display: grid; place-items: center; font-size: 60px; }
+  #itembox.timed { background: conic-gradient(rgba(255,208,0,.55) calc(var(--t) * 1turn), rgba(10,10,30,.45) 0); }
   #itembox.rolling { animation: pulse .12s infinite alternate; }
   @keyframes pulse { to { border-color: #ffd000; } }
   #itemcount { position: absolute; right: -6px; bottom: -8px; font-family: 'Luckiest Guy'; font-size: 30px; }
@@ -2572,21 +2573,21 @@ function updateHazards(dt) {
 const ITEMS = {
   turbo: { icon: '⚡', name: 'Turbo' }, triple: { icon: '⚡', name: 'Triplo Turbo' }, banana: { icon: '🍌', name: 'Buccia' },
   green: { icon: '🟢', name: 'Sfera Rimbalzina' }, red: { icon: '🔴', name: 'Sfera Cercatrice' }, star: { icon: '⭐', name: 'Super Stella' }, coin: { icon: '🪙', name: 'Monete' },
+  blue: { icon: '🔵', name: 'Sfera Blu' }, bolt: { icon: '🌩️', name: 'Fulmine' }, gold: { icon: '🍄', name: 'Fungo Dorato' }, bullet: { icon: '🚀', name: 'Pallottola' }, fire: { icon: '🔥', name: 'Fiore di Fuoco' },
 };
-const ICON_CYCLE = ['⚡', '🍌', '🟢', '🔴', '⭐', '🪙'];
-function rollItem(rank) {
-  const tbl = rank === 0 ? [['banana', 40], ['green', 35], ['coin', 25]]
-    : rank <= 2 ? [['banana', 25], ['green', 30], ['red', 25], ['turbo', 20]]
-    : rank <= 5 ? [['red', 30], ['turbo', 28], ['triple', 20], ['green', 12], ['star', 10]]
-    : [['triple', 35], ['red', 25], ['star', 25], ['turbo', 15]];
+const ICON_CYCLE = ['⚡', '🍌', '🟢', '🔴', '⭐', '🪙', '🔵', '🌩️', '🍄', '🚀', '🔥'];
+function rollItem(rank, n) {
+  const tbl = itemTable(rank, n);
   let r = Math.random() * tbl.reduce((s, x) => s + x[1], 0);
-  for (const [n, w] of tbl) { r -= w; if (r <= 0) return n; }
+  for (const [id, w] of tbl) { r -= w; if (r <= 0) return id; }
   return tbl[0][0];
 }
 const bananaGeo = new THREE.TorusGeometry(0.55, 0.2, 8, 16, Math.PI * 1.1);
 const bananaMat = new THREE.MeshStandardMaterial({ color: 0xffe135, roughness: 0.45, emissive: 0x332a00 });
 const shellGeo = new THREE.SphereGeometry(0.75, 20, 14), ringGeo = new THREE.TorusGeometry(0.72, 0.13, 8, 24);
-const shellMat = { green: new THREE.MeshStandardMaterial({ color: 0x1ed760, roughness: 0.25, metalness: 0.2, emissive: 0x0a5a20, emissiveIntensity: 0.6 }), red: new THREE.MeshStandardMaterial({ color: 0xff2a2a, roughness: 0.25, metalness: 0.2, emissive: 0x801010, emissiveIntensity: 0.9 }) };
+const shellMat = { green: new THREE.MeshStandardMaterial({ color: 0x1ed760, roughness: 0.25, metalness: 0.2, emissive: 0x0a5a20, emissiveIntensity: 0.6 }), red: new THREE.MeshStandardMaterial({ color: 0xff2a2a, roughness: 0.25, metalness: 0.2, emissive: 0x801010, emissiveIntensity: 0.9 }),
+  blue: new THREE.MeshStandardMaterial({ color: 0x2a6bff, roughness: 0.25, metalness: 0.2, emissive: 0x1030a0, emissiveIntensity: 0.9 }),
+  fire: new THREE.MeshStandardMaterial({ color: 0xff7a1a, emissive: 0xff4a00, emissiveIntensity: 1.6, roughness: 0.4 }) };
 
 // =====================================================================
 //  KART
@@ -2651,6 +2652,7 @@ class Kart {
     this.gi = { idx: 0, lat: 0, h: 0, roadY: 0, al: 0 };
     this.moveYaw = this.yaw; this.steerIn = 0;
     this.draftT = 0; this.draftCd = 0;
+    this.goldT = 0; this.fireT = 0; this.bulletT = 0; this.shrinkT = 0; this.shrinkVis = 1;
     this.respawnT = 0; this.respawnTo = 0; this.safeIdx = idx; this.drone = null;
     this.gliding = false; this.glideVis = 0; this.rampRef = null; this.rampRefT = 0; this.glider = makeGlider(ch.color); this.mesh.add(this.glider);
     this.netPos = this.pos.clone(); this.netYaw = this.yaw; this.netT = 0; this.netSeen = performance.now();
@@ -2662,9 +2664,9 @@ class Kart {
   netState() {
     const r = v => Math.round(v * 100) / 100;
     return [this.id, r(this.pos.x), r(this.pos.y), r(this.pos.z), Math.round(this.yaw * 1000) / 1000, r(this.speed),
-      (this.drifting ? 1 : 0) | (this.grounded ? 2 : 0) | (this.hopping ? 4 : 0) | (this.onRoad ? 8 : 0) | (this.gliding ? 16 : 0) | (this.respawnT > 0 ? 32 : 0),
+      (this.drifting ? 1 : 0) | (this.grounded ? 2 : 0) | (this.hopping ? 4 : 0) | (this.onRoad ? 8 : 0) | (this.gliding ? 16 : 0) | (this.respawnT > 0 ? 32 : 0) | (this.bulletT > 0 ? 64 : 0) | (this.shrinkT > 0 ? 128 : 0),
       this.driftDir, this.sparkLevel, r(this.steerVis), r(this.boostT), r(this.starT), r(this.spinT), r(this.flipT), r(this.invulnT), r(this.trickT),
-      this.lap, this.idx, this.progress, this.finished ? 1 : 0, r(this.finishTime), this.coins, r(this.vy)];
+      this.lap, this.idx, this.progress, this.finished ? 1 : 0, r(this.finishTime), this.coins, r(this.vy), r(this.bulletT), r(this.shrinkT)];
   }
   netApply(s) {
     this.netPos.set(s[1], s[2], s[3]); this.netYaw = s[4]; this.speed = s[5];
@@ -2673,7 +2675,7 @@ class Kart {
     this.boostT = s[10]; this.starT = s[11]; this.spinT = s[12]; this.flipT = s[13]; this.invulnT = s[14]; this.trickT = s[15];
     this.lap = s[16]; this.idx = s[17]; this.progress = s[18];
     if (s[19] && !this.finished) { this.finished = true; this.finishTime = s[20]; }
-    this.coins = s[21]; this.vy = s[22]; this.netSeen = performance.now();
+    this.coins = s[21]; this.vy = s[22]; this.bulletT = s[23] ?? 0; this.shrinkT = s[24] ?? 0; this.netSeen = performance.now();
   }
   updateRemote(dt) {
     // dead reckoning + inseguimento morbido
@@ -2684,7 +2686,7 @@ class Kart {
     if (this.pos.distanceToSquared(this.netPos) > 400) this.pos.copy(this.netPos);
     else this.pos.lerp(this.netPos, a);
     this.yaw = lerpAngle(this.yaw, this.netYaw, a);
-    for (const k of ['boostT', 'starT', 'spinT', 'flipT', 'invulnT', 'trickT', 'respawnT']) this[k] = Math.max(0, this[k] - dt);
+    for (const k of ['boostT', 'starT', 'spinT', 'flipT', 'invulnT', 'trickT', 'respawnT', 'bulletT', 'shrinkT']) this[k] = Math.max(0, this[k] - dt);
     const g = groundInfo(this.pos.x, this.pos.z, this.idx, this.gi);
     this.lat = g.lat;
     if (this.grounded) this.pos.y = lerp(this.pos.y, g.h, 1 - Math.exp(-20 * dt));
@@ -2699,7 +2701,7 @@ class Kart {
     this.drifting = false; this.charge = 0; this.sparkLevel = 0;
   }
   hit(kind) {
-    if (this.remote || this.starT > 0 || this.invulnT > 0) return false;
+    if (this.remote || this.starT > 0 || this.bulletT > 0 || this.invulnT > 0 || this.respawnT > 0) return false;
     if (this.isPlayer) padRumble(kind === 'spin' ? 180 : 320);
     if (this.drifting) this.endDrift(false);
     if (kind === 'spin') { this.spinT = 0.95; this.speed *= 0.3; this.invulnT = 1.3; }
@@ -2731,6 +2733,19 @@ class Kart {
       }
       case 'star': this.starT = 7.5; this.boost(0.6); consume(); if (this.isPlayer) sfx.star(); break;
       case 'coin': this.coins = Math.min(10, this.coins + 2); if (this.isPlayer) { sfx.coin(); setTimeout(() => sfx.coin(), 120); } consume(); break;
+      case 'blue': {
+        const tg = G.ranking[0];
+        const d = { k: 'blue', id: this.id + '_' + (++projSeq), o: this.id, x: this.pos.x + fx * 2, y: this.pos.y + 6, z: this.pos.z + fz * 2, dx: fx, dz: fz, i: this.idx, tg: tg ? tg.id : null, sp: this.cfg.max * 1.8 };
+        spawnProjectile(d); netSend({ t: 'ev', e: 'spawn', d }); consume(); if (this.isPlayer) sfx.throw(); break;
+      }
+      case 'bolt': consume(); netSend({ t: 'ev', e: 'bolt', o: this.id }); applyBolt(this.id); break;
+      case 'gold': if (this.goldT <= 0) this.goldT = 7; this.boost(1.0); break;
+      case 'bullet': this.bulletT = 3; consume(); if (this.isPlayer) sfx.boost(); break;
+      case 'fire': {
+        if (this.fireT <= 0) this.fireT = 8;
+        const d = { k: 'fire', id: this.id + '_' + (++projSeq), o: this.id, x: this.pos.x + fx * 3, y: this.pos.y + 0.8, z: this.pos.z + fz * 3, dx: fx, dz: fz, i: this.idx, tg: null, sp: this.cfg.max * 1.3 };
+        spawnProjectile(d); netSend({ t: 'ev', e: 'spawn', d }); if (this.isPlayer) sfx.throw(); break;
+      }
     }
   }
   update(dt, inp) {
@@ -2739,6 +2754,10 @@ class Kart {
     this.boostT = Math.max(0, this.boostT - dt); this.starT = Math.max(0, this.starT - dt);
     this.spinT = Math.max(0, this.spinT - dt); this.flipT = Math.max(0, this.flipT - dt); this.invulnT = Math.max(0, this.invulnT - dt);
     this.bumpCd -= dt; this.trickT = Math.max(0, this.trickT - dt);
+    if (this.bulletT > 0 && this.bulletT <= dt) this.invulnT = 1;
+    this.bulletT = Math.max(0, this.bulletT - dt); this.shrinkT = Math.max(0, this.shrinkT - dt);
+    if (this.goldT > 0 && (this.goldT -= dt) <= 0 && this.item === 'gold') { this.item = null; this.itemCount = 0; }
+    if (this.fireT > 0 && (this.fireT -= dt) <= 0 && this.item === 'fire') { this.item = null; this.itemCount = 0; }
     if (this.roulette > 0) {
       this.roulette -= dt;
       if (this.isPlayer && (this.rollTick -= dt) <= 0) { this.rollTick = 0.07; sfx.tickR(); }
@@ -2748,11 +2767,14 @@ class Kart {
     const stunned = this.spinT > 0 || this.flipT > 0;
     let top = cc.max * st.speed * (1 + this.coins * 0.012) * this.rubber;
     if (this.starT > 0) top *= 1.12;
+    if (this.shrinkT > 0) top *= 0.7;
     const offroad = !this.onRoad && this.starT <= 0 && this.boostT <= 0;
     if (offroad) top *= 0.45;
     if (this.boostT > 0) top = Math.max(top, cc.max * st.speed * 1.4);
+    if (this.bulletT > 0) { top = cc.max * st.speed * 1.5; this.speed = lerp(this.speed, top, 1 - Math.exp(-4 * dt)); }
     const accel = cc.accel * st.accel;
-    if (stunned) this.speed *= Math.exp(-2.6 * dt);
+    if (this.bulletT > 0) { /* velocità già fissata dalla pallottola */ }
+    else if (stunned) this.speed *= Math.exp(-2.6 * dt);
     else if (this.boostT > 0) this.speed = lerp(this.speed, top, 1 - Math.exp(-6 * dt));
     else if (inp.throttle && !inp.brake) {
       if (this.speed < top) this.speed = Math.min(top, this.speed + accel * dt * (this.speed < 0 ? 3 : 1) * (1.15 - 0.55 * Math.max(0, this.speed) / top));
@@ -2905,6 +2927,8 @@ class Kart {
     this.body.position.y = hopY;
     this.glideVis = lerp(this.glideVis, this.gliding ? 1 : 0, 1 - Math.exp(-10 * dt));
     this.glider.visible = this.glideVis > 0.02; this.glider.scale.setScalar(Math.max(0.01, this.glideVis));
+    this.shrinkVis = lerp(this.shrinkVis, this.shrinkT > 0 ? 0.55 : 1, 1 - Math.exp(-10 * dt));
+    this.mesh.scale.setScalar(this.shrinkVis);
     // LOD con isteresi: il proprio kart e quelli vicini alla camera in dettaglio pieno
     const cd = camera.position.distanceTo(this.pos);
     setKartFar(this.v, !this.isPlayer && (this.v.far ? cd > LOD_NEAR : cd > LOD_FAR));
@@ -2915,7 +2939,8 @@ class Kart {
     animKart(this, dt, this.v);
     // stella
     const lm = this.v.lodMat;
-    if (this.starT > 0) { this.paint.emissive.setHSL((G.time * 2.5) % 1, 1, 0.5); this.paint.emissiveIntensity = 1.2; lm.emissive.copy(this.paint.emissive); lm.emissiveIntensity = 0.8; }
+    if (this.bulletT > 0) { this.paint.emissive.setRGB(0.05, 0.05, 0.08); this.paint.emissiveIntensity = 1; }
+    else if (this.starT > 0) { this.paint.emissive.setHSL((G.time * 2.5) % 1, 1, 0.5); this.paint.emissiveIntensity = 1.2; lm.emissive.copy(this.paint.emissive); lm.emissiveIntensity = 0.8; }
     else if (this.paint.emissiveIntensity !== 0) { this.paint.emissive.setRGB(0, 0, 0); this.paint.emissiveIntensity = 0; lm.emissiveIntensity = 0; }
     this.mesh.visible = !(this.invulnT > 0 && this.spinT <= 0 && this.flipT <= 0 && Math.floor(G.time * 18) % 2 === 0);
     const carried = this.respawnT > 0 && this.respawnT < 1.1;
@@ -2941,7 +2966,7 @@ class Kart {
         SMOKE.emit(x, y + 0.2, z, rand(-1, 1), rand(0.5, 1.5), rand(-1, 1), C(0xe8e8e8), 0.55, 0.4, 0, 1.4);
       }
     }
-    if (this.boostT > 0) {
+    if (this.boostT > 0 || this.bulletT > 0) {
       // come le scintille: tasso fisso al secondo, metà per i kart delle IA
       this._boostAcc = (this._boostAcc || 0) + dt * (this.isPlayer ? 70 : 30);
       const n = Math.floor(this._boostAcc); this._boostAcc -= n;
@@ -2965,6 +2990,19 @@ class Kart {
       const [x, y, z] = wp(rand(-1.2, 1.2), rand(0.3, 2.2), rand(-1.6, 1.6));
       FX.emit(x, y, z, rand(-2, 2), rand(1, 4), rand(-2, 2), _hsl.setHSL(Math.random(), 1, 0.6), 0.6, 0.4, 0);
     }
+  }
+}
+
+// fulmine: ogni client rimpicciolisce i propri kart (tranne chi l'ha usato)
+function applyBolt(ownerId) {
+  flash(); sfx.boom();
+  const n = G.karts.length;
+  for (const k of G.karts) {
+    if (k.remote || k.id === ownerId || k.starT > 0 || k.bulletT > 0 || k.respawnT > 0) continue;
+    k.shrinkT = 3 + 3 * (n > 1 ? k.rank / (n - 1) : 0);
+    k.item = null; k.itemCount = 0; k.roulette = 0; k.goldT = 0; k.fireT = 0;
+    if (k.drifting) k.endDrift(false);
+    k.spinT = Math.max(k.spinT, 0.5); k.speed *= 0.6;
   }
 }
 
@@ -3009,7 +3047,7 @@ function aiInput(k, dt) {
     inp.driftPressed = true; inp.drift = true; inp.steer = turn < 0 ? 1 : -1;
   } else if (k.hopping) { inp.drift = true; inp.steer = turn < 0 ? 1 : -1; }
   // oggetti
-  if (k.item && k.roulette <= 0) {
+  if (k.item && k.roulette <= 0 && !k.isPlayer) {
     k.itemT -= dt;
     if (k.itemT <= 0) {
       let use = true;
@@ -3018,7 +3056,10 @@ function aiInput(k, dt) {
       } else if (k.item === 'banana') {
         use = G.karts.some(o => o !== k && o.pos.distanceTo(k.pos) < 25 && o.progress < k.progress) || k.itemT < -4;
       }
-      if (use) { inp.itemPressed = true; k.itemT = rand(0.6, 3); }
+      else if (k.item === 'fire') use = G.karts.some(o => o !== k && o.pos.distanceTo(k.pos) < 30 && Math.abs(wrapA(Math.atan2(o.pos.x - k.pos.x, o.pos.z - k.pos.z) - k.yaw)) < 0.3) || k.itemT < -3;
+      else if (k.item === 'blue') use = k.rank > 0 || k.itemT < -6;
+      else if (k.item === 'bullet') use = k.speed > 0.5 * k.cfg.max;
+      if (use) { inp.itemPressed = true; k.itemT = k.item === 'gold' ? 0.5 : k.item === 'fire' ? rand(0.4, 1.2) : rand(0.6, 3); }
     }
   }
   // bloccato
@@ -3335,6 +3376,7 @@ function netApplyStates(a) { if (!Array.isArray(a)) return; for (const s of a) {
 function netApplyEvent(d) {
   if (d.e === 'spawn' && d.d && !findProjectile(d.d.id)) spawnProjectile(d.d);
   else if (d.e === 'rm') removeProjectile(d.id);
+  else if (d.e === 'bolt') applyBolt(d.o);
 }
 function saveName() {
   NET.name = ($('netName').value || '').trim().slice(0, 12) || 'Pilota';
@@ -3706,12 +3748,12 @@ function renderResults() {
 //  PROIETTILI (banane, sfere) — creati uguali su tutti i client
 // =====================================================================
 // pool dei proiettili: mesh create una volta e riciclate (niente allocazioni durante la gara)
-const PROJ_POOL = { banana: [], green: [], red: [] };
+const PROJ_POOL = { banana: [], green: [], red: [], blue: [], fire: [] };
 function getProj(kind) {
   let o = PROJ_POOL[kind].pop();
   if (!o) {
     if (kind === 'banana') { o = new THREE.Mesh(bananaGeo, bananaMat); o.castShadow = true; }
-    else { o = new THREE.Group(); const s = new THREE.Mesh(shellGeo, shellMat[kind]); s.castShadow = true; o.add(s); const r = new THREE.Mesh(ringGeo, MAT.white); r.rotation.x = Math.PI / 2; o.add(r); }
+    else { o = new THREE.Group(); const s = new THREE.Mesh(shellGeo, shellMat[kind]); s.castShadow = true; o.add(s); if (kind === 'fire') s.scale.setScalar(0.55); else { const r = new THREE.Mesh(ringGeo, MAT.white); r.rotation.x = Math.PI / 2; o.add(r); } }
     scene.add(o);
   }
   o.visible = true; o.rotation.set(0, 0, 0); o.scale.setScalar(1);
@@ -3732,7 +3774,7 @@ function spawnProjectile(d) {
   } else {
     const g = getProj(d.k);
     const p = new THREE.Vector3(d.x, d.y, d.z); g.position.copy(p); g.scale.setScalar(0.1);
-    G.shells.push({ id: d.id, g, pos: p, dir: new THREE.Vector2(d.dx, d.dz), type: d.k, idx: d.i ?? 0, life: d.k === 'red' ? 14 : 9, owner, safe: 0.35, bounces: 0, target: d.tg ? kartById(d.tg) || null : null, speed: d.sp });
+    G.shells.push({ id: d.id, g, pos: p, dir: new THREE.Vector2(d.dx, d.dz), type: d.k, idx: d.i ?? 0, f: d.i ?? 0, life: d.k === 'red' ? 14 : d.k === 'blue' ? 25 : d.k === 'fire' ? 3 : 9, owner, safe: 0.35, bounces: 0, target: d.tg ? kartById(d.tg) || null : null, speed: d.sp });
   }
 }
 const findProjectile = id => G.bananas.find(b => b.id === id) || G.shells.find(s => s.id === id);
@@ -3799,7 +3841,7 @@ function updateRaceObjects(dt) {
       if (dx * dx + dz * dz < 7 && Math.abs(dy) < 3) {
         b.active = false; b.g.visible = false; b.t = 2.5;
         for (let q = 0; q < 30; q++) FX.emit(b.g.position.x, b.g.position.y, b.g.position.z, rand(-10, 10), rand(-2, 12), rand(-10, 10), _hsl.setHSL(Math.random(), 1, 0.6), rand(0.4, 0.9), rand(0.4, 0.8), 18);
-        if (!k.remote && !k.item && k.roulette <= 0) { k.pending = rollItem(k.rank); k.roulette = k.isPlayer ? 1.6 : 1.0; }
+        if (!k.remote && !k.item && k.roulette <= 0) { k.pending = rollItem(k.rank, G.karts.length); k.roulette = k.isPlayer ? 1.6 : 1.0; }
         if (k.isPlayer) { sfx.box(); padRumble(40); }
       }
     }
@@ -3824,8 +3866,11 @@ function updateRaceObjects(dt) {
       if (a.remote) { wa = 0; wb = 1; } else if (b.remote) { wa = 1; wb = 0; }
       a.pos.x -= nx * ov * wa; a.pos.z -= nz * ov * wa; b.pos.x += nx * ov * wb; b.pos.z += nz * ov * wb;
       a.ext.x -= nx * 9 * wa; a.ext.z -= nz * 9 * wa; b.ext.x += nx * 9 * wb; b.ext.z += nz * 9 * wb;
-      if (a.starT > 0 && b.starT <= 0) b.hit('flip');
-      if (b.starT > 0 && a.starT <= 0) a.hit('flip');
+      const inv = k => k.starT > 0 || k.bulletT > 0;
+      if (inv(a) && !inv(b)) b.hit('flip');
+      if (inv(b) && !inv(a)) a.hit('flip');
+      if (a.shrinkT > 0 && b.shrinkT <= 0) a.hit('flip');
+      if (b.shrinkT > 0 && a.shrinkT <= 0) b.hit('flip');
       if ((a.isPlayer || b.isPlayer) && (a.isPlayer ? a : b).bumpCd <= 0) { sfx.bump(); padRumble(60); (a.isPlayer ? a : b).bumpCd = 0.35; }
     }
   }
@@ -3862,6 +3907,7 @@ function updateRaceObjects(dt) {
   for (let i = G.shells.length - 1; i >= 0; i--) {
     const s = G.shells[i]; s.life -= dt; s.safe -= dt;
     let dead = s.life <= 0, hitSent = false;
+    if (s.type === 'blue') { if (updateBlue(s, dt) || dead) { shellBurst(s); freeProj('blue', s.g); G.shells.splice(i, 1); } continue; }
     if (s.type === 'red' && s.target && !s.target.finished) {
       const tgt = s.target; const dxT = tgt.pos.x - s.pos.x, dzT = tgt.pos.z - s.pos.z, dist = Math.hypot(dxT, dzT);
       let want;
@@ -3881,12 +3927,13 @@ function updateRaceObjects(dt) {
       if (s.bounces > 6) dead = true;
     }
     s.g.position.copy(s.pos); s.g.rotation.y += dt * 12; if (s.g.scale.x < 1) s.g.scale.setScalar(Math.min(1, s.g.scale.x + dt * 8));
+    if (s.type === 'fire' && Math.random() < 0.8) FX.emit(s.pos.x, s.pos.y, s.pos.z, rand(-1, 1), rand(0, 2), rand(-1, 1), C(0xff8a1a), 0.7, 0.3, 0);
     if (s.type === 'red' && FX && Math.random() < 0.7) FX.emit(s.pos.x, s.pos.y, s.pos.z, rand(-1, 1), rand(0, 1), rand(-1, 1), C(0xff4020), 0.6, 0.25, 0);
     if (Math.random() < 0.6) SMOKE.emit(s.pos.x, s.pos.y - 0.3, s.pos.z, 0, 1, 0, C(0xffffff), 0.8, 0.35, 0, 1.5);
     for (const k of ks) {
       if (k.remote || (k === s.owner && s.safe > 0)) continue;
       const dx = k.pos.x - s.pos.x, dz = k.pos.z - s.pos.z;
-      if (dx * dx + dz * dz < 5 && Math.abs(k.pos.y + 0.8 - s.pos.y) < 2.5) { k.hit('flip'); dead = true; hitSent = true; break; }
+      if (dx * dx + dz * dz < 5 && Math.abs(k.pos.y + 0.8 - s.pos.y) < 2.5) { k.hit(s.type === 'fire' ? 'spin' : 'flip'); dead = true; hitSent = true; break; }
     }
     for (let j = G.bananas.length - 1; j >= 0 && !dead; j--) {
       const b = G.bananas[j]; if (b.pos.distanceToSquared(s.pos) < 3) { freeProj('banana', b.m); G.bananas.splice(j, 1); dead = true; }
@@ -3897,6 +3944,29 @@ function updateRaceObjects(dt) {
       freeProj(s.type, s.g); G.shells.splice(i, 1);
     }
   }
+}
+// sfera blu: vola sopra la pista fino al primo, poi picchia e esplode (raggio 8)
+function updateBlue(s, dt) {
+  if (!s.target || s.target.finished || !G.karts.includes(s.target)) s.target = G.ranking[0] || null;
+  const tg = s.target; if (!tg) return true;
+  s.g.rotation.y += dt * 12; if (s.g.scale.x < 1) s.g.scale.setScalar(Math.min(1, s.g.scale.x + dt * 8));
+  let gap = tg.idx - Math.floor(s.f); if (gap < 0) gap += N;
+  if (gap > 25) {
+    s.f = (s.f + s.speed * dt / SP) % N; const i = Math.floor(s.f);
+    s.pos.set(P[i].x, P[i].y + 6, P[i].z); s.idx = i;
+  } else {
+    const dx = tg.pos.x - s.pos.x, dy = tg.pos.y + 1 - s.pos.y, dz = tg.pos.z - s.pos.z, d = Math.hypot(dx, dy, dz);
+    if (d < 1.5) {
+      for (const k of G.karts) if (!k.remote && k.pos.distanceTo(s.pos) < 8) k.hit('flip');
+      for (let q = 0; q < 60; q++) FX.emit(s.pos.x, s.pos.y, s.pos.z, rand(-16, 16), rand(0, 16), rand(-16, 16), C(q % 2 ? 0x2a6bff : 0xffffff), rand(0.8, 1.6), 0.7, 10);
+      return true;
+    }
+    const st = Math.min(d, s.speed * 0.8 * dt);
+    s.pos.x += dx / d * st; s.pos.y += dy / d * st; s.pos.z += dz / d * st;
+  }
+  s.g.position.copy(s.pos);
+  if (FX && Math.random() < 0.8) FX.emit(s.pos.x, s.pos.y, s.pos.z, rand(-1, 1), rand(0, 1), rand(-1, 1), C(0x4a8bff), 0.7, 0.3, 0);
+  return false;
 }
 function updateRanking() {
   const prevRank = G.player ? G.player.rank : 0;
@@ -3967,6 +4037,9 @@ function updateHUD() {
   if (isFinite(p.bestLap)) setTxt('bestVal', 'Miglior giro ' + fmtTime(p.bestLap));
   const ib = $('itembox');
   setHud('rolling', p.roulette > 0, v => ib.classList.toggle('rolling', v));
+  const tm = p.goldT > 0 ? p.goldT / 7 : p.fireT > 0 ? p.fireT / 8 : 0;
+  setHud('timed', tm > 0, v => ib.classList.toggle('timed', v));
+  if (tm > 0) ib.style.setProperty('--t', tm.toFixed(3));
   if (p.roulette > 0) { setTxt('itemIcon', ICON_CYCLE[Math.floor(G.time * 14) % ICON_CYCLE.length]); setTxt('itemcount', ''); }
   else { setTxt('itemIcon', p.item ? ITEMS[p.item].icon : ''); setTxt('itemcount', p.item && p.itemCount > 1 ? 'x' + p.itemCount : ''); }
   setHud('wrong', !(p.wrongT > 1.2 && G.state === 'race'), v => { $('wrong').hidden = v; });
@@ -4097,7 +4170,7 @@ function frame(now) {
         G.raceTime += sdt;
         for (const k of G.karts) {
           if (k.remote) { k.updateRemote(sdt); continue; }
-          const ki = (k.isPlayer && G.state === 'race' && !G.autopilot) ? inp : aiInput(k, sdt);
+          const ki = (k.isPlayer && G.state === 'race' && !G.autopilot && k.bulletT <= 0) ? inp : aiInput(k, sdt);
           if (k.isPlayer && G.state === 'race') { k.rubber = 1; }
           k.update(sdt, ki);
         }
