@@ -557,7 +557,7 @@ const MAPS = [
     colors: { a: 0x3f9e34, b: 0x86d24a, edge: 0x5aa83a, sand: 0xf2dea0, wet: 0x2f9e9a, rock: 0x8f8a84, snow: 0xffffff, rockH: 22, snowH: 44 },
     road: { base: '#5b5e66', edge: '#f4f4f4', center: 'rgba(255,255,255,.75)' }, curb: ['#e8262b', '#fafafa'],
     fence: { post: 0xf5f5f5, cols: [0xe53935, 0xf5f5f5] }, arch: 0x2b2f3a, banner: ['#2a5bff', '#1433a8', '#ffd000'], roof: 0xe53935,
-    ramps: [{ near: [15, -192], h: 2.0, len: 8, w: 12, lat: 0 }],
+    ramps: [{ near: [15, -192], h: 2.6, len: 10, w: 12, lat: 0, glide: true }],
     pads: [[0.29, 6], [0.62, -6], [0.9, 0], [0.97, 5]], boxes: [0.12, 0.45, 0.78],
     coins: [[0.05, 0, 0], [0.22, -6, 0.4], [0.33, 6, -0.4], [0.55, 0, 0], [0.66, -7, 0], [0.88, 5, -0.2], [0.94, -4, 0.3]],
     hazards: [], decor: 'island', weather: null, clouds: 32, balloons: 7,
@@ -581,7 +581,7 @@ const MAPS = [
     colors: { a: 0xb85a2e, b: 0xe6a060, edge: 0xd9a066, sand: 0xe8c07a, wet: 0xa05a30, rock: 0x8a3e22, snow: 0xf3d7a6, rockH: 999, snowH: 999, strata: true },
     road: { base: '#6b5a52', edge: '#ffe8c0', center: 'rgba(255,214,120,.8)' }, curb: ['#d8541e', '#f6e6c8'],
     fence: { post: 0x6b4a2e, cols: [0x8a5a34, 0x6b4a2e] }, arch: 0x5a3a24, banner: ['#d8541e', '#8a2e12', '#ffe28a'], roof: 0xd8541e,
-    auto: { ramps: 2, pads: 5, boxes: 4, coins: 9, hazards: { type: 'roller', n: 4, cols: [0x9a5030, 0x8a4a2a, 0xa25a36] } },
+    auto: { ramps: 1, glides: 1, pads: 5, boxes: 4, coins: 9, hazards: { type: 'roller', n: 4, cols: [0x9a5030, 0x8a4a2a, 0xa25a36] } },
     decor: 'canyon', weather: 'dust', clouds: 10, balloons: 3,
   },
   {
@@ -642,7 +642,7 @@ const MAPS = [
     colors: { a: 0x3a2e2a, b: 0x5a463a, edge: 0x5e4a3e, sand: 0x5a3a2a, wet: 0xff5a10, rock: 0x1c1816, snow: 0x6a605a, rockH: 34, snowH: 70 },
     road: { base: '#56504e', edge: '#ff8a1a', center: 'rgba(255,200,60,.7)' }, curb: ['#ff5a10', '#2a2226'],
     fence: { post: 0x222222, cols: [0xff5a10, 0x333333] }, arch: 0x201a1a, banner: ['#ff5a10', '#7a1a0a', '#ffd000'], roof: 0xff5a10,
-    auto: { ramps: 2, pads: 5, boxes: 4, coins: 8, hazards: { type: 'geyser', n: 6 } },
+    auto: { ramps: 1, glides: 1, pads: 5, boxes: 4, coins: 8, hazards: { type: 'geyser', n: 6 } },
     decor: 'volcano', weather: 'embers', clouds: 14, balloons: 0,
   },
 ];
@@ -711,6 +711,7 @@ function autoLayout(map) {
   };
   const r3 = f => Math.round(f * 1000) / 1000;
   map.ramps = pick(A.ramps || 0, 0.08, 0.15, 0.9).map(f => ({ f: r3(f), h: 2.2 + rr() * 0.6, len: 8, w: 13, lat: 0 }));
+  for (const f of pick(A.glides || 0, 0.1, 0.2, 0.85)) map.ramps.push({ f: r3(f), h: 3, len: 12, w: 13, lat: 0, glide: true });
   const pads = map.ramps.map(r => [r3(r.f - 11 / N), 0]);
   pick(Math.max(0, (A.pads || 0) - pads.length), 0.05, 0.08, 0.97).forEach(f => pads.push([r3(f), [-5, 0, 5][Math.floor(rr() * 3)]]));
   map.pads = pads;
@@ -799,13 +800,14 @@ function groundInfo(x, z, hint, out = _gi) {
   const lat = dx * sd.x + dz * sd.z, al = dx * t.x + dz * t.z;
   const roadY = p.y + al * SLOPE[best];
   let h = blendH(roadY, Math.abs(lat), x, z);
+  let onRamp = null;
   for (const R of RAMPS) {
     let di = best - R.idx; if (di > N / 2) di -= N; if (di < -N / 2) di += N;
     if (di < -12 || di > 12) continue;
     const a = di * SP + al;
-    if (a > -R.len / 2 && a < R.len / 2 && Math.abs(lat - R.lat) < R.w / 2) h += (a + R.len / 2) / R.len * R.h;
+    if (a > -R.len / 2 && a < R.len / 2 && Math.abs(lat - R.lat) < R.w / 2) { h += (a + R.len / 2) / R.len * R.h; onRamp = R; }
   }
-  out.idx = best; out.lat = lat; out.h = h; out.roadY = roadY; out.al = al;
+  out.idx = best; out.lat = lat; out.h = h; out.roadY = roadY; out.al = al; out.ramp = onRamp;
   return out;
 }
 
@@ -2456,17 +2458,19 @@ function placeGameObjects() {
   // trampolini
   const rampTex = PM(canvasTex(256, 256, (g, w, h) => { for (let k = 0; k < 8; k++) { g.fillStyle = k % 2 ? '#1c1c22' : '#ffcc00'; g.beginPath(); g.moveTo(k * 64 - 128, h); g.lineTo(k * 64 - 64, h); g.lineTo(k * 64 + 64, 0); g.lineTo(k * 64, 0); g.fill(); } }));
   const rampTop = new THREE.MeshStandardMaterial({ map: rampTex, roughness: 0.5, emissive: 0x332200 });
+  const glideTex = PM(canvasTex(256, 256, (g, w, h) => { g.fillStyle = '#ff7a1a'; g.fillRect(0, 0, w, h); g.fillStyle = '#ffffff'; for (let k = 0; k < 3; k++) { const y = 40 + k * 70; g.beginPath(); g.moveTo(w / 2, y); g.lineTo(w / 2 + 70, y + 50); g.lineTo(w / 2 + 40, y + 50); g.lineTo(w / 2, y + 22); g.lineTo(w / 2 - 40, y + 50); g.lineTo(w / 2 - 70, y + 50); g.fill(); } }));
+  const glideTop = new THREE.MeshStandardMaterial({ map: glideTex, roughness: 0.5, emissive: 0x552200 });
   for (const r of M.ramps) {
     let best = 0;
     if (r.near) { let bd = 1e18; const tx = r.near[0] * TS, tz = r.near[1] * TS; for (let i = 0; i < N; i++) { const d = (P[i].x - tx) ** 2 + (P[i].z - tz) ** 2; if (d < bd) { bd = d; best = i; } } }
     else best = Math.floor(N * r.f);
-    const R = { idx: best, len: r.len, w: r.w, h: r.h, lat: r.lat || 0 };
+    const R = { idx: best, len: r.len, w: r.w, h: r.h, lat: r.lat || 0, glide: !!r.glide };
     RAMPS.push(R);
     const rg = new THREE.BoxGeometry(R.w, 1, R.len, 1, 1, 1);
     const ra = rg.attributes.position;
     for (let k = 0; k < ra.count; k++) { const y = ra.getY(k), z = ra.getZ(k); ra.setY(k, y > 0 ? (z > 0 ? R.h : 0.02) : -0.4); }
     rg.computeVertexNormals();
-    const ramp = new THREE.Mesh(rg, [MAT.dark, MAT.dark, rampTop, MAT.dark, MAT.dark, MAT.dark]);
+    const ramp = new THREE.Mesh(rg, [MAT.dark, MAT.dark, R.glide ? glideTop : rampTop, MAT.dark, MAT.dark, MAT.dark]);
     const rp = P[best]; ramp.position.set(rp.x + SD[best].x * R.lat, rp.y, rp.z + SD[best].z * R.lat);
     ramp.rotation.order = 'YXZ'; ramp.rotation.y = ANG[best]; ramp.rotation.x = Math.atan(SLOPE[best]) * -1;
     ramp.castShadow = true; ramp.receiveShadow = true; world.add(ramp);
@@ -2585,6 +2589,16 @@ function nameTag(txt, color) {
   return s;
 }
 
+const gliderGeo = (() => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 1.6, -3.4, 0, -1.2, 3.4, 0, -1.2], 3)); g.computeVertexNormals(); return g; })();
+const gliderStrut = new THREE.CylinderGeometry(0.05, 0.05, 1.6, 5);
+function makeGlider(color) {
+  const g = new THREE.Group();
+  const wing = new THREE.Mesh(gliderGeo, new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide, roughness: 0.6 })); wing.position.y = 2.9; g.add(wing);
+  for (const s of [-1, 1]) { const st = new THREE.Mesh(gliderStrut, MAT.dark); st.position.set(s * 0.5, 2.1, -0.2); st.rotation.z = s * 0.3; g.add(st); }
+  g.userData.glider = true; g.visible = false; g.scale.setScalar(0.01);
+  return g;
+}
+
 class Kart {
   // opts: { id, remote (stato dalla rete), bot, name, tag }
   constructor(ch, isPlayer, slot, opts = {}) {
@@ -2610,6 +2624,7 @@ class Kart {
     this.gi = { idx: 0, lat: 0, h: 0, roadY: 0, al: 0 };
     this.moveYaw = this.yaw; this.steerIn = 0;
     this.draftT = 0; this.draftCd = 0;
+    this.gliding = false; this.glideVis = 0; this.rampRef = null; this.rampRefT = 0; this.glider = makeGlider(ch.color); this.mesh.add(this.glider);
     this.netPos = this.pos.clone(); this.netYaw = this.yaw; this.netT = 0; this.netSeen = performance.now();
     this.pos.y = groundInfo(this.pos.x, this.pos.z, idx, this.gi).h;
     this.netPos.y = this.pos.y;
@@ -2619,13 +2634,13 @@ class Kart {
   netState() {
     const r = v => Math.round(v * 100) / 100;
     return [this.id, r(this.pos.x), r(this.pos.y), r(this.pos.z), Math.round(this.yaw * 1000) / 1000, r(this.speed),
-      (this.drifting ? 1 : 0) | (this.grounded ? 2 : 0) | (this.hopping ? 4 : 0) | (this.onRoad ? 8 : 0),
+      (this.drifting ? 1 : 0) | (this.grounded ? 2 : 0) | (this.hopping ? 4 : 0) | (this.onRoad ? 8 : 0) | (this.gliding ? 16 : 0),
       this.driftDir, this.sparkLevel, r(this.steerVis), r(this.boostT), r(this.starT), r(this.spinT), r(this.flipT), r(this.invulnT), r(this.trickT),
       this.lap, this.idx, this.progress, this.finished ? 1 : 0, r(this.finishTime), this.coins, r(this.vy)];
   }
   netApply(s) {
     this.netPos.set(s[1], s[2], s[3]); this.netYaw = s[4]; this.speed = s[5];
-    const f = s[6]; this.drifting = !!(f & 1); this.grounded = !!(f & 2); this.hopping = !!(f & 4); this.onRoad = !!(f & 8);
+    const f = s[6]; this.drifting = !!(f & 1); this.grounded = !!(f & 2); this.hopping = !!(f & 4); this.onRoad = !!(f & 8); this.gliding = !!(f & 16);
     this.driftDir = s[7]; this.sparkLevel = s[8]; this.steerVis = s[9];
     this.boostT = s[10]; this.starT = s[11]; this.spinT = s[12]; this.flipT = s[13]; this.invulnT = s[14]; this.trickT = s[15];
     this.lap = s[16]; this.idx = s[17]; this.progress = s[18];
@@ -2733,7 +2748,7 @@ class Kart {
       if (!inp.drift || spd < 12 || stunned) this.endDrift(!stunned);
     } else {
       const rate = st.handling * smooth(0, 9, spd) * lerp(1.6, 1.18, clamp(spd / cc.max, 0, 1)) * (this.boostT > 0 ? 0.92 : 1);
-      this.yaw -= s * rate * dt * (this.speed < 0 ? -1 : 1) * (this.grounded ? 1 : 0.35);
+      this.yaw -= s * rate * dt * (this.speed < 0 ? -1 : 1) * (this.grounded ? 1 : this.gliding ? 0.6 : 0.35);
       if (inp.driftPressed && this.grounded && !stunned && spd > 8) {
         this.vy = 5.5; this.grounded = false; this.hopping = true; if (this.isPlayer) sfx.hop();
       }
@@ -2766,13 +2781,20 @@ class Kart {
     }
     // verticale
     const h = g.h;
+    if (g.ramp) { this.rampRef = g.ramp; this.rampRefT = 0.3; } else this.rampRefT -= dt;
     if (this.grounded) {
       if (h >= this.pos.y - 0.9) { this.vy = clamp((h - this.pos.y) / Math.max(dt, 1e-3), -20, 25); this.pos.y = h; }
-      else { this.grounded = false; if (this.vy > 4) { this.rampAir = true; this.vy += 5; } this.airT = 0; }
+      else { this.grounded = false; if (this.vy > 4) { this.rampAir = true; this.vy += 5; if (this.rampRefT > 0 && this.rampRef && this.rampRef.glide) { this.gliding = true; if (this.isPlayer) sfx.trick(); } } this.airT = 0; }
     }
     if (!this.grounded) {
       this.airT += dt;
-      this.vy -= 36 * dt; this.pos.y += this.vy * dt;
+      if (this.gliding) {
+        const up = inp.throttle && !inp.brake, dn = inp.brake;
+        this.vy -= 12 * dt; this.vy = Math.max(this.vy, dn ? -3.5 : up ? -10 : -6);
+        if (up) this.speed += 6 * dt;
+        this.speed *= Math.exp(-0.04 * dt);
+      } else this.vy -= 36 * dt;
+      this.pos.y += this.vy * dt;
       if (this.pos.y <= h) { this.pos.y = h; this.land(inp); }
     }
     // scia: dietro a un kart per 1,4 s → turbo
@@ -2798,7 +2820,7 @@ class Kart {
     this.wrongT = (dot < -0.35 && this.speed > 3) || (dot > 0.35 && this.speed < -3) ? this.wrongT + dt : 0;
   }
   land(inp) {
-    this.grounded = true; this.vy = 0;
+    this.grounded = true; this.vy = 0; this.gliding = false;
     if (this.hopping) {
       this.hopping = false;
       if (inp.drift && Math.abs(inp.steer || 0) > 0.25 && Math.abs(this.speed) > 12 && this.spinT <= 0) { this.drifting = true; this.driftDir = Math.sign(inp.steer); this.charge = 0; this.sparkLevel = 0; }
@@ -2834,6 +2856,8 @@ class Kart {
     this.body.rotation.z = this.lean + trickA;
     const hopY = this.hopping ? 0.12 : 0;
     this.body.position.y = hopY;
+    this.glideVis = lerp(this.glideVis, this.gliding ? 1 : 0, 1 - Math.exp(-10 * dt));
+    this.glider.visible = this.glideVis > 0.02; this.glider.scale.setScalar(Math.max(0.01, this.glideVis));
     // LOD con isteresi: il proprio kart e quelli vicini alla camera in dettaglio pieno
     const cd = camera.position.distanceTo(this.pos);
     setKartFar(this.v, !this.isPlayer && (this.v.far ? cd > LOD_NEAR : cd > LOD_FAR));
