@@ -406,6 +406,46 @@ function assignKey(map, action, slot, code) {
 }
 
 // =====================================================================
+//  MECCANICHE (logica pura) — niente DOM/THREE: testata da tests/mechanics.test.mjs
+// =====================================================================
+const ITEM_TABLES = [
+  [0,   [['banana', 35], ['green', 30], ['coin', 25], ['fire', 10]]],
+  [0.3, [['banana', 20], ['green', 25], ['red', 20], ['turbo', 15], ['fire', 15], ['gold', 5]]],
+  [0.6, [['red', 25], ['turbo', 20], ['triple', 15], ['gold', 15], ['fire', 10], ['star', 8], ['blue', 4], ['bolt', 3]]],
+  [1,   [['triple', 25], ['star', 18], ['gold', 15], ['bullet', 15], ['red', 12], ['blue', 8], ['bolt', 7]]],
+];
+function itemTable(rank, n) {
+  if (rank <= 0) return ITEM_TABLES[0][1];
+  const r = n > 1 ? rank / (n - 1) : 0;
+  for (let i = 1; i < ITEM_TABLES.length; i++) if (r <= ITEM_TABLES[i][0]) return ITEM_TABLES[i][1];
+  return ITEM_TABLES[ITEM_TABLES.length - 1][1];
+}
+const DRAFT_COS = Math.cos(12 * Math.PI / 180);
+// indice in `list` del kart più vicino davanti entro maxD e ±12°, -1 se nessuno
+function draftTarget(x, z, yaw, list, self, maxD = 22) {
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  let best = -1, bd = maxD * maxD;
+  for (let i = 0; i < list.length; i++) {
+    const o = list[i]; if (o === self) continue;
+    const dx = o.pos.x - x, dz = o.pos.z - z, d2 = dx * dx + dz * dz;
+    if (d2 >= bd || d2 < 4) continue;
+    if ((dx * fx + dz * fz) / Math.sqrt(d2) < DRAFT_COS) continue;
+    best = i; bd = d2;
+  }
+  return best;
+}
+const respawnIdx = (safeIdx, n) => ((safeIdx - 8) % n + n) % n;
+const isFallen = (y, roadY, wl, liquid) => y < roadY - 12 || (liquid && y < wl + 0.2);
+// tratto aperto (senza barriera) sul lato `side` alla frazione di giro f
+function openSideAt(open, f, side) {
+  for (const [a, b, s] of open) {
+    if (s !== 0 && s !== side) continue;
+    if (a <= b ? f >= a && f <= b : f >= a || f <= b) return true;
+  }
+  return false;
+}
+
+// =====================================================================
 //  RENDERER / SCENE
 // =====================================================================
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
