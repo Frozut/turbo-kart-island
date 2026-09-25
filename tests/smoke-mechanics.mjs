@@ -19,7 +19,7 @@ setTimeout(() => { console.log('TIMEOUT globale'); edge.kill(); process.exit(2);
 const shot = async name => { if (!OUT) return; const r = await send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(OUT, name), Buffer.from(r.result.data, 'base64')); };
 const key = (code, type) => ev(`window.dispatchEvent(new KeyboardEvent('${type}', { code: '${code}', bubbles: true })), true`);
 // helper nella pagina: piazza un kart su un indice di pista
-const HELP = `window.__place = (k, i, lat, sp) => { const g = window.__game, P = g.P, SD = g.SD, A = g.ANG; k.pos.set(P[i].x + SD[i].x * lat, P[i].y + 0.05, P[i].z + SD[i].z * lat); k.yaw = k.moveYaw = A[i]; k.idx = i; k.speed = sp; k.vy = 0; k.grounded = true; k.ext.set(0, 0, 0); k.spinT = k.flipT = 0; };`;
+const HELP = `window.__place = (k, i, lat, sp) => { const g = window.__game, P = g.P, SD = g.SD, A = g.ANG; k.pos.set(P[i].x + SD[i].x * lat, P[i].y + 0.05, P[i].z + SD[i].z * lat); k.yaw = k.moveYaw = A[i]; k.idx = i; k.gidx = i; k.speed = sp; k.vy = 0; k.grounded = true; k.ext.set(0, 0, 0); k.spinT = k.flipT = 0; };`;
 
 try {
   let wsUrl = null;
