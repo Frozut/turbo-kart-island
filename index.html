@@ -2594,8 +2594,8 @@ function animKart(k, dt, v) {
   }
   // stelline sopra la testa quando storditi
   for (let i = 0; i < v.stars.length; i++) {
-    const s = v.stars[i]; s.visible = stunned;
-    if (stunned) { const a = t * 6 + i * Math.PI * 2 / 3; s.position.set(Math.cos(a) * 0.4, 0.45 + Math.sin(t * 9 + i) * 0.05, Math.sin(a) * 0.4); }
+    const dz = stunned || k.dizzyT > 0; const s = v.stars[i]; s.visible = dz; s.scale.setScalar(0.36);
+    if (dz) { const a = t * 6 + i * Math.PI * 2 / 3; s.position.set(Math.cos(a) * 0.4, 0.45 + Math.sin(t * 9 + i) * 0.05, Math.sin(a) * 0.4); }
   }
 }
 const _exh = { x: 0, y: 0, z: 0 };
@@ -2609,6 +2609,15 @@ const RINGS = [];
 const ringGeoB = new THREE.TorusGeometry(1, 0.08, 6, 36);
 // pool: gli anelli sono creati una volta e riciclati
 const RING_POOL = [];
+const SKID = { mesh: null, n: 0, max: 1200 };
+const skidGeo = new THREE.PlaneGeometry(0.34, 1).rotateX(-Math.PI / 2);
+function addSkid(x, y, z, yaw, len) {
+  if (!SKID.mesh) { SKID.mesh = new THREE.InstancedMesh(skidGeo, new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.38, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }), SKID.max); SKID.mesh.frustumCulled = false; SKID.mesh.count = 0; scene.add(SKID.mesh); }
+  dummy.position.set(x, y, z); dummy.rotation.set(0, yaw, 0); dummy.scale.set(1, 1, len); dummy.updateMatrix();
+  SKID.mesh.setMatrixAt(SKID.n % SKID.max, dummy.matrix); SKID.n++;
+  SKID.mesh.count = Math.min(SKID.n, SKID.max); SKID.mesh.instanceMatrix.needsUpdate = true;
+}
+function clearSkids() { SKID.n = 0; if (SKID.mesh) SKID.mesh.count = 0; }
 function spawnBoostRing(k) {
   if (!k.isPlayer && camera.position.distanceToSquared(k.pos) > 90 * 90) return;
   let m = RING_POOL.pop();
@@ -3089,6 +3098,7 @@ class Kart {
       // in volo (deltaplano, salti) il muro riallinea il kart senza rallentarlo né farlo rimbalzare
       if (into > 0.15) { if (this.grounded) this.speed *= 1 - 0.55 * into; this.yaw = lerpAngle(this.yaw, ANG[g.idx] + (this.speed < 0 ? Math.PI : 0), this.grounded ? 0.35 : 0.2); this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 0.6); }
       if (this.grounded) {
+        if (into > 0.15 && Math.abs(this.speed) > 15 && FX) for (let k = 0; k < 10; k++) FX.emit(this.pos.x + sd.x * sg * 1.3, this.pos.y + 0.5, this.pos.z + sd.z * sg * 1.3, -fx * this.speed * 0.3 + rand(-3, 3), rand(2, 7), -fz * this.speed * 0.3 + rand(-3, 3), C(k % 2 ? 0xffc040 : 0xffffff), rand(0.2, 0.4), rand(0.2, 0.4), 20);
         this.ext.x -= sd.x * sg * 5; this.ext.z -= sd.z * sg * 5;
         if (this.isPlayer && this.bumpCd <= 0 && Math.abs(this.speed) > 10) { sfx.bump(); this.bumpCd = 0.4; G.shake = Math.max(G.shake, 0.25); }
       }
@@ -3143,7 +3153,18 @@ class Kart {
       if (inp.drift && Math.abs(inp.steer || 0) > 0.25 && Math.abs(this.speed) > 10 && this.spinT <= 0) { this.hopBuf = 0; this.drifting = true; this.driftDir = Math.sign(inp.steer); this.charge = 0; this.sparkLevel = 0; }
     }
     if (this.rampAir) { this.rampAir = false; if (this.trick) { this.trick = false; this.boost(0.9, TRICK_COLS); } }
-    if (this.isPlayer && this.airT > 0.3) { G.shake = Math.max(G.shake, 0.2); for (let k = 0; k < 20; k++) SMOKE.emit(this.pos.x + rand(-1.5, 1.5), this.pos.y + 0.3, this.pos.z + rand(-1.5, 1.5), rand(-4, 4), rand(1, 3), rand(-4, 4), C(0xd9d0c0), 1.6, 0.7, 0, 2); }
+    if (this.airT > 0.3 && SMOKE && camera.position.distanceToSquared(this.pos) < 120 * 120) {
+      if (this.isPlayer) G.shake = Math.max(G.shake, 0.2);
+      const n = Math.min(32, 14 + Math.round(this.airT * 10));
+      for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2, v = rand(6, 9); SMOKE.emit(this.pos.x + Math.cos(a) * 1.2, this.pos.y + 0.25, this.pos.z + Math.sin(a) * 1.2, Math.cos(a) * v, rand(0.5, 1.5), Math.sin(a) * v, C(0xd9d0c0), 1.4, 0.6, 0, 2.2); }
+    }
+  }
+  // effetti del colpo: sbuffo di fumo, scintille, rimbalzo e stelline che durano un po' di più
+  hitFx() {
+    this.sqV = (this.sqV || 0) + 7; this.dizzyT = 1.3;
+    if (!FX || camera.position.distanceToSquared(this.pos) > 140 * 140) return;
+    for (let k = 0; k < 18; k++) { const a = k / 18 * Math.PI * 2; SMOKE.emit(this.pos.x + Math.cos(a) * 0.8, this.pos.y + 0.8, this.pos.z + Math.sin(a) * 0.8, Math.cos(a) * 5, rand(1, 3), Math.sin(a) * 5, C(0x9a9a9a), 1.3, 0.6, 0, 2.2); }
+    for (let k = 0; k < 22; k++) FX.emit(this.pos.x, this.pos.y + 1, this.pos.z, rand(-12, 12), rand(3, 12), rand(-12, 12), C(k % 2 ? 0xffb030 : 0xfff2a0), rand(0.25, 0.5), rand(0.3, 0.55), 22);
   }
   startRespawn() {
     if (this.respawnT > 0) return;
@@ -3180,13 +3201,27 @@ class Kart {
     const spinA = this.spinT > 0 ? (1 - this.spinT / 0.95) * Math.PI * 4 : 0;
     const flipA = this.flipT > 0 ? (1 - this.flipT / 1.25) * Math.PI * 2 : 0;
     const trickA = this.trickT > 0 ? (1 - this.trickT / 0.45) * Math.PI * 2 : 0;
-    this.mesh.rotation.set(0, this.yaw + this.driftVis + spinA, 0);
+    // fronti di salita (valgono anche per i kart remoti: dipendono solo dai timer ricevuti)
+    const hitNow = this.spinT > 0 || this.flipT > 0;
+    if (hitNow && !this._wasHit) this.hitFx();
+    this._wasHit = hitNow;
+    if (this.trickT > 0 && !this._wasTrick) this.trickType = Math.floor(Math.random() * 3); // 0 avvitamento, 1 capriola, 2 giro
+    this._wasTrick = this.trickT > 0;
+    if (!this.grounded) this._airVis = (this._airVis || 0) + dt;
+    else { if (this._airVis > 0.35) this.sqV = (this.sqV || 0) + Math.min(5, 1.5 + this._airVis * 2.5); this._airVis = 0; }
+    if (!hitNow) this.dizzyT = Math.max(0, (this.dizzyT || 0) - dt); // il capogiro conta dopo la fine dello stordimento
+    // schiacciamento e allungamento: molla smorzata
+    this.sq = this.sq || 0; this.sqV = this.sqV || 0;
+    this.sqV += (-170 * this.sq - 13 * this.sqV) * dt; this.sq = clamp(this.sq + this.sqV * dt, -0.5, 0.6);
+    this.body.scale.set(1 + this.sq * 0.28, 1 - this.sq * 0.42, 1 + this.sq * 0.28);
+    const tt = this.trickType || 0;
+    this.mesh.rotation.set(0, this.yaw + this.driftVis + spinA + (tt === 2 ? trickA : 0), 0);
     const fwdSlope = SLOPE[this.gidx] * Math.cos(this.yaw - ANG[this.gidx]);
     const pitch = this.grounded ? -Math.atan(fwdSlope) : clamp(-this.vy * 0.025, -0.45, 0.45);
     this.pitch = lerp(this.pitch, pitch, 1 - Math.exp(-10 * dt));
-    this.body.rotation.x = this.pitch + flipA;
+    this.body.rotation.x = this.pitch + flipA + (tt === 1 ? -trickA : 0);
     this.lean = lerp(this.lean, (this.steerVis * 0.07 + (this.drifting ? this.driftDir * 0.12 : 0)) * clamp(Math.abs(this.speed) / 30, 0, 1), 1 - Math.exp(-8 * dt));
-    this.body.rotation.z = this.lean + trickA;
+    this.body.rotation.z = this.lean + (tt === 0 ? trickA : 0);
     const hopY = this.hopping ? 0.12 : 0;
     this.body.position.y = hopY;
     this.glideVis = lerp(this.glideVis, this.gliding ? 1 : 0, 1 - Math.exp(-10 * dt));
@@ -3218,18 +3253,34 @@ class Kart {
     if (this.drifting && this.grounded) {
       // emissione a tasso fisso (particelle/secondo), non per frame: con fps alti o tanti kart in derapata esplodeva il numero di scintille
       const c = SPARK_COLS[this.sparkLevel];
-      this._sparkAcc = (this._sparkAcc || 0) + dt * (this.sparkLevel ? 80 : 24) * (this.isPlayer ? 1 : 0.5);
+      this._sparkAcc = (this._sparkAcc || 0) + dt * (this.sparkLevel ? 55 + 25 * this.sparkLevel : 24) * (this.isPlayer ? 1 : 0.5);
       const n = Math.floor(this._sparkAcc); this._sparkAcc -= n;
       for (let k = 0; k < n; k++) {
         const sx = (this._sparkSide ^= 1) ? 1.1 : -1.1;
         const [x, y, z] = wp(sx, 0.15, -1.3);
-        FX.emit(x, y, z, -fx * 4 + rand(-3, 3) + rx * sx * 3, rand(2, 6), -fz * 4 + rand(-3, 3) + rz * sx * 3, c, this.sparkLevel ? rand(0.35, 0.7) : 0.3, rand(0.15, 0.3), 18);
+        FX.emit(x, y, z, -fx * 4 + rand(-3, 3) + rx * sx * 3, rand(2, 6), -fz * 4 + rand(-3, 3) + rz * sx * 3, c, [0.3, 0.45, 0.65, 0.9][this.sparkLevel] * rand(0.8, 1.25), rand(0.15, 0.3) + this.sparkLevel * 0.04, 18);
       }
       if (Math.random() < dt * 6) {
         const [x, y, z] = wp(Math.random() < 0.5 ? -1.1 : 1.1, 0.15, -1.3);
         SMOKE.emit(x, y + 0.2, z, rand(-1, 1), rand(0.5, 1.5), rand(-1, 1), C(0xe8e8e8), 0.55, 0.4, 0, 1.4);
       }
     }
+    if (this.trickT > 0) {
+      for (let k = 0; k < 3; k++) { const [x, y, z] = wp(rand(-1.4, 1.4), rand(0.4, 1.8), rand(-1.6, 1.2)); FX.emit(x, y, z, rand(-2, 2), rand(-1, 2), rand(-2, 2), TRICK_COLS[k], 0.55, 0.35, 0); }
+    }
+    // segni delle gomme in derapata (solo vicino alla telecamera)
+    // segmenti continui: da dove era la ruota al segno precedente a dove è ora (indipendente dagli fps)
+    if (this.drifting && this.grounded && this.onRoad && cd < 90) {
+      const last = this._skidLast || (this._skidLast = [null, null]);
+      [-1.05, 1.05].forEach((sx, k) => {
+        const [x, , z] = wp(sx, 0, -1.25), l = last[k];
+        if (!l) { last[k] = { x, z }; return; }
+        const dx = x - l.x, dz = z - l.z, d = Math.hypot(dx, dz);
+        if (d < 0.8) return;
+        if (d < 6) addSkid((x + l.x) / 2, this.pos.y + 0.07, (z + l.z) / 2, Math.atan2(dx, dz), d + 0.15);
+        l.x = x; l.z = z;
+      });
+    } else this._skidLast = null;
     if (this.boostT > 0 || this.bulletT > 0) {
       // come le scintille: tasso fisso al secondo, metà per i kart delle IA
       this._boostAcc = (this._boostAcc || 0) + dt * (this.isPlayer ? 70 : 30);
@@ -3821,6 +3872,7 @@ function updatePauseUI() {
 // =====================================================================
 const kartById = id => G.karts.find(k => k.id === id);
 function clearRace() {
+  clearSkids();
   for (const k of G.karts) { disposeKartExtras(k); scene.remove(k.mesh); disposeKartInstance(k.v); }
   for (const b of G.bananas) freeProj('banana', b.m);
   for (const s of G.shells) freeProj(s.type, s.g);
@@ -4753,7 +4805,7 @@ setInterval(() => {
     if (jc) { $('netCode').value = jc.toUpperCase(); show('online'); }
   } catch (e) { console.error(e); window.dispatchEvent(new ErrorEvent('error', { message: e.stack || String(e) })); }
 })();
-window.__game = { aheadIdx, groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; }, get BRIDGE() { return BRIDGE; }, get BR() { return BR; }, get GAP() { return GAP; }, get coins() { return coins; }, get boxes() { return boxes; } };
+window.__game = { aheadIdx, groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; }, get BRIDGE() { return BRIDGE; }, get BR() { return BR; }, get GAP() { return GAP; }, get coins() { return coins; }, get boxes() { return boxes; }, get skids() { return SKID.n; } };
 </script>
 </body>
 </html>
