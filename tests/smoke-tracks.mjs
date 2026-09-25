@@ -59,6 +59,29 @@ try {
     }
   }
 
+  // --- rami: percorrenza della scorciatoia (con salto) e caduta nel buco
+  const nb = await ev(`window.__game.BR.length`);
+  if (nb) {
+    const HELP = `window.__place = (k, i, lat, sp) => { const g = window.__game, P = g.P, SD = g.SD, A = g.ANG; k.pos.set(P[i].x + SD[i].x * lat, P[i].y + 0.05, P[i].z + SD[i].z * lat); k.yaw = k.moveYaw = A[i]; k.idx = i < g.N ? i : k.idx; k.gidx = i; k.speed = sp; k.vy = 0; k.grounded = true; k.ext.set(0, 0, 0); k.spinT = k.flipT = 0; k.boostT = k.starT = k.bulletT = 0; };`;
+    await ev(HELP);
+    const b = await ev(`(() => { const b = window.__game.BR[0]; return { s: b.s, n: b.n, from: b.from, to: b.to, kind: b.kind, gaps: window.__game.GAP.reduce((a, v) => a + v, 0) }; })()`);
+    check('ramo costruito', b.n > 10, JSON.stringify(b));
+    // percorso completo del ramo in autopilota, forzando la scelta (dopo il primo passaggio sul traguardo, che azzera le scelte)
+    await ev(`(() => { const g = window.__game, G = g.G, p = G.player; G.autopilot = true; p.invulnT = 0; p.item = null; p.route = null; p.forceRoute = { 0: true }; window.__resp = 0; const o = p.startRespawn.bind(p); p.startRespawn = () => { if (p.respawnT <= 0) window.__resp++; o(); }; __place(p, ${b.s} + 3, 0, p.cfg.max * 0.8); window.__onBranch = 0; window.__brIv = setInterval(() => { if (p.gidx >= g.N) window.__onBranch++; }, 50); return true; })()`);
+    if (b.gaps) { await until(`window.__game.G.player.gidx >= window.__game.GAP.findIndex(v => v) - 4`, 20000); await sleep(150); await shot(`track-${MAP}-jump.png`); }
+    const back = await until(`(() => { const g = window.__game, p = g.G.player; const rel = (p.idx - ${b.to} + g.N) % g.N; return p.gidx < g.N && rel > 5 && rel < 200; })()`, 30000);
+    await ev(`clearInterval(window.__brIv), true`);
+    const samples = await ev('window.__onBranch');
+    check('scorciatoia percorsa e rientro sulla principale', back && samples > b.n * 1.5 / 60 / 0.05 * 0.5, `campioni sul ramo ${samples}, recuperi ${await ev('window.__resp')}`);
+    check('salto del burrone riuscito (nessuna caduta)', (await ev('window.__resp')) === 0);
+    if (b.gaps) {
+      await ev(`(() => { const g = window.__game, p = g.G.player; g.G.autopilot = false; const gi = g.GAP.findIndex(v => v); __place(p, gi + 3, 0, 0); p.grounded = false; p.pos.y += 0.5; return true; })()`);
+      check('nel buco si cade', await until(`window.__game.G.player.respawnT > 0`, 4000));
+      check('recuperato sulla strada', await until(`(() => { const g = window.__game, p = g.G.player; return p.respawnT === 0 && !g.GAP[p.gidx]; })()`, 5000), await ev(`'gidx ' + window.__game.G.player.gidx`));
+    }
+    await ev(`(() => { const p = window.__game.G.player; p.forceRoute = null; p.startRespawn = Object.getPrototypeOf(p).startRespawn.bind(p); return true; })()`);
+  }
+
   // --- un giro in autopilota: nessun blocco, pochi recuperi
   await ev(`(() => { const g = window.__game, G = g.G, p = G.player; G.autopilot = true; window.__resp = 0; const o = p.startRespawn.bind(p); p.startRespawn = () => { if (p.respawnT <= 0) window.__resp++; o(); }; window.__prog0 = p.progress; return true; })()`);
   await until(`window.__game.G.player.lap >= 1`, 30000); await sleep(500);
