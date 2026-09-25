@@ -683,6 +683,21 @@ const MAPS = [
       ramps: [{ u: 0.425, h: 3.2, len: 10, w: 12 }] }],
     decor: 'island', weather: null, clouds: 26, balloons: 4,
   },
+  {
+    id: 'sky', name: 'Castello di Nuvole', emoji: '🏰', desc: 'Strada sospesa sul vuoto: tratti senza bordi, un anello che passa sopra sé stesso e una corsia parallela senza protezioni.',
+    cp: [[0,40,0,13],[150,40,0,13],[280,44,-40,12],[340,50,-140,11],[300,56,-240,11],[190,60,-270,12],[100,60,-200,12],[140,59,-100,11],[200,58,20,12],[210,56,120,13],[100,50,180,13],[-60,44,170,12],[-180,38,90,11],[-220,34,-20,11],[-150,36,-110,12],[-60,38,-80,12],[-25,40,-25,13]],
+    ts: 1, bpm: 158, key: 4, grip: 1, terrain: 'sky', floating: true, island: 0,
+    mounts: b => [],
+    sky: { top: 0x3a6fd8, hor: 0xffd8e8, low: [0.95, 0.85, 0.95], sun: [0.4, 0.5, -0.76], sunCol: 0xffe8d0, sunI: 2.4, hemi: [0xfff0ff, 0xb0c8ff, 1.2], fog: [350, 1600], fogCol: 0xf2e6f5, exposure: 1.05, env: 0.7, envGround: 0xe8e8f5, bloom: [0.45, 0.55, 0.9], stars: 0 },
+    water: null,
+    colors: { a: 0xf6f8ff, b: 0xe6ecfa, edge: 0xdde6f5, sand: 0xf0f0ff, wet: 0xe0e8f8, rock: 0xcfd6e8, snow: 0xffffff, rockH: 999, snowH: 999 },
+    road: { base: '#6b6f86', edge: '#ffffff', center: 'rgba(255,215,120,.85)' }, curb: ['#ff7ac8', '#ffffff'],
+    fence: { post: 0xffffff, cols: [0xff7ac8, 0x9ad0ff] }, arch: 0xf0e8ff, banner: ['#ff7ac8', '#7a5cff', '#ffffff'], roof: 0x7a5cff,
+    bridges: [{ near: [185, -12], len: 120 }],
+    auto: { ramps: 0, glides: 2, open: { n: 4, len: 0.04 }, pads: 6, boxes: 5, coins: 10 },
+    branches: [{ fromNear: [210, 120], toNear: [-60, 170], kind: 'road', w: 9, lead: 25, cp: [[170, 55, 150], [80, 51, 132], [5, 47, 150]], open: [[0.12, 0.88, 0]] }],
+    decor: 'sky', weather: null, clouds: 40, balloons: 5,
+  },
 ];
 const mapById = id => MAPS.find(m => m.id === id) || MAPS[0];
 
@@ -787,7 +802,13 @@ function setupTrack(map) {
   GAP = new Uint8Array(NT); HAS_GAP = false;
   BR.forEach((b, k) => { const gp = map.branches[k].gap; if (!gp) return; HAS_GAP = true; for (let j = 0; j < b.n; j++) { const f = j / (b.n - 1); if (f >= gp[0] && f <= gp[1]) GAP[b.s + j] = 1; } });
   BRIDGE = new Uint8Array(NT); HAS_BRIDGE = !!(map.bridges && map.bridges.length);
-  if (HAS_BRIDGE) { const br = map.bridges.map(([a, b]) => [a, b, 0]); for (let i = 0; i < N; i++) BRIDGE[i] = openSideAt(br, i / N, 1) ? 1 : 0; }
+  if (map.floating) { BRIDGE.fill(1); HAS_BRIDGE = true; }
+  else if (HAS_BRIDGE) {
+    // { near: [x, z], len }: il tratto più alto che passa vicino al punto (l'incrocio visto da sopra)
+    const byNear = e => { let c = -1; for (let i = 0; i < N; i++) { const d = Math.hypot(P[i].x - e.near[0] * TS, P[i].z - e.near[1] * TS); if (d < 12 && (c < 0 || P[i].y > P[c].y)) c = i; } const h = e.len / 2 / LEN; return [((c / N - h) % 1 + 1) % 1, (c / N + h) % 1, 0]; };
+    const br = map.bridges.map(e => Array.isArray(e) ? [e[0], e[1], 0] : byNear(e));
+    for (let i = 0; i < N; i++) BRIDGE[i] = openSideAt(br, i / N, 1) ? 1 : 0;
+  }
 }
 // disposizione automatica e deterministica (uguale su tutti i client) di trampolini, pad, box, monete e pericoli
 function autoLayout(map) {
@@ -860,6 +881,8 @@ function naturalH(x, z) {
     h = 40 + n * 1.3 + mountSum(x, z);
     const q = 7, f = h / q, fl = Math.floor(f);
     h = (fl + smooth(0.7, 1, f - fl)) * q;
+  } else if (t === 'sky') {
+    h = -140 + baseNoise(x, z) * 2;
   } else if (t === 'city') {
     h = -0.6 + Math.sin(x * 0.01) * Math.cos(z * 0.013) * 0.3;
   } else if (t === 'volcano') {
@@ -877,7 +900,7 @@ function naturalH(x, z) {
   return h;
 }
 function blendH(roadY, dist, x, z) {
-  if (MAP.deck) return dist < WALL + 1.2 ? roadY : naturalH(x, z);
+  if (MAP.deck || MAP.floating) return dist < WALL + 1.2 ? roadY : naturalH(x, z);
   if (dist < BLEND[0]) return roadY;
   return lerp(roadY, naturalH(x, z), smooth(BLEND[0], BLEND[1], dist));
 }
@@ -1086,7 +1109,7 @@ function skirt(lat, mat, mask) {
   const pos = [], idx = [];
   for (let i = 0; i <= N; i++) {
     const j = i % N, p = P[j], s = SD[j], el = edgeLat(j, lat), x = p.x + s.x * el, z = p.z + s.z * el;
-    pos.push(x, p.y + 0.05, z, x, Math.min(p.y - 0.3, (mask ? terrainBase(x, z) : naturalH(x, z)) - 1), z);
+    pos.push(x, p.y + 0.05, z, x, MAP.floating ? p.y - 3 : Math.min(p.y - 0.3, (mask ? terrainBase(x, z) : naturalH(x, z)) - 1), z);
     if (i < N && (!mask || (mask(j) && mask((j + 1) % N)))) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
   }
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
@@ -1177,11 +1200,14 @@ function buildBranchRoads(M, texRoad, curbMat) {
   }
 }
 function buildBridges(M) {
-  const onB = j => BRIDGE[j] === 1;
-  const walk = new THREE.MeshStandardMaterial({ color: 0x8a8f99, roughness: 0.75 });
-  ribbon(HW + 1.9, WALL + 1.2, 0.05, 8, walk, null, onB); ribbon(-WALL - 1.2, -HW - 1.9, 0.05, 8, walk, null, onB);
-  const side = new THREE.MeshStandardMaterial({ color: 0x6d717a, roughness: 0.85, side: THREE.DoubleSide });
-  skirt(WALL + 1.2, side, onB); skirt(-WALL - 1.2, side, onB);
+  const onR = j => BRIDGE[j] === 1 && !OPEN_R[j], onL = j => BRIDGE[j] === 1 && !OPEN_L[j];
+  const openR = j => BRIDGE[j] === 1 && OPEN_R[j] === 1, openL = j => BRIDGE[j] === 1 && OPEN_L[j] === 1;
+  const walk = new THREE.MeshStandardMaterial({ color: M.floating ? 0xe8e2f2 : 0x8a8f99, roughness: 0.75 });
+  ribbon(HW + 1.9, WALL + 1.2, 0.05, 8, walk, null, onR); ribbon(-WALL - 1.2, -HW - 1.9, 0.05, 8, walk, null, onL);
+  const side = new THREE.MeshStandardMaterial({ color: M.floating ? 0xb8b0cc : 0x6d717a, roughness: 0.85, side: THREE.DoubleSide });
+  skirt(WALL + 1.2, side, onR); skirt(-WALL - 1.2, side, onL);
+  skirt(HW + 1.9, side, openR); skirt(-HW - 1.9, side, openL); // lati aperti: la lastra finisce al cordolo
+  if (M.floating) return;
   const pil = IM(new THREE.CylinderGeometry(1.2, 1.5, 1, 10).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x9aa0aa, roughness: 0.7 }), 300);
   for (let i = 0; i < N; i += 10) {
     if (!BRIDGE[i]) continue;
@@ -1329,12 +1355,12 @@ async function buildWorld() {
   // --- bandiere lungo il rettilineo
   const flagCols = [0xff3b3b, 0xffd000, 0x2f80ff, 0x22c55e, 0xff4fd8];
   const flagGeo = new THREE.PlaneGeometry(2.4, 1.5, 8, 1); flagGeo.translate(1.2, 0, 0);
-  const sideLat = M.deck ? WALL + 0.4 : WALL + 2;
+  const sideLat = M.deck || M.floating ? WALL + 0.4 : WALL + 2;
   const flagPoles = IM(new THREE.CylinderGeometry(0.1, 0.1, 7, 8), archMat, 24);
   for (let k = -8; k <= 12; k++) {
     if (k === 0) continue;
     const i = wrapI(k * 9);
-    const sl = sideLat + XW[i], x = P[i].x + SD[i].x * sl, z = P[i].z + SD[i].z * sl, y = M.deck ? P[i].y : blendH(P[i].y, sideLat, x, z);
+    const sl = sideLat + XW[i], x = P[i].x + SD[i].x * sl, z = P[i].z + SD[i].z * sl, y = M.deck || M.floating ? P[i].y : blendH(P[i].y, sideLat, x, z);
     flagPoles.put(x, y + 3.5, z);
     const fm = new THREE.Mesh(flagGeo, new THREE.MeshStandardMaterial({ color: flagCols[(k + 20) % flagCols.length], side: THREE.DoubleSide, roughness: 0.6 }));
     fm.position.set(x, y + 6.2, z); fm.castShadow = true; world.add(fm); anim.flags.push({ m: fm, ph: rand(0, 6) });
@@ -1345,7 +1371,7 @@ async function buildWorld() {
   const chevGeo = new THREE.PlaneGeometry(6, 2.25);
   const chevMat = new THREE.MeshStandardMaterial({ map: texChevron, side: THREE.DoubleSide, roughness: 0.5, emissive: 0xffffff, emissiveMap: texChevron, emissiveIntensity: glow ? 0.7 : 0.15 });
   let lastSign = -999;
-  const signLat = M.deck ? WALL + 0.4 : WALL + 1.6;
+  const signLat = M.deck || M.floating ? WALL + 0.4 : WALL + 1.6;
   const boards = IM(chevGeo, chevMat, 400), legs = IM(new THREE.CylinderGeometry(0.12, 0.12, 2.6, 8), archMat, 800, false);
   for (let i = 0; i < N; i += 3) {
     const a = wrapA(ANG[wrapI(i + 18)] - ANG[wrapI(i - 18)]);
@@ -1354,7 +1380,7 @@ async function buildWorld() {
       const s = a < 0 ? 1 : -1; // esterno curva
       for (const off of [-14, 0, 14]) {
         const j = wrapI(i + off), lat = s * (signLat + XW[j]);
-        const x = P[j].x + SD[j].x * lat, z = P[j].z + SD[j].z * lat, y = M.deck ? P[j].y : blendH(P[j].y, signLat, x, z);
+        const x = P[j].x + SD[j].x * lat, z = P[j].z + SD[j].z * lat, y = M.deck || M.floating ? P[j].y : blendH(P[j].y, signLat, x, z);
         const ry = ANG[j] + Math.PI, cr = Math.cos(ry), sr = Math.sin(ry);
         boards.put(x, y + 2.6, z, a > 0 ? -1 : 1, 1, 1, ry);
         for (const px of [-2.4, 2.4]) legs.put(x + px * cr - 0.05 * sr, y + 1.3, z - px * sr - 0.05 * cr, 1, 1, 1, ry);
@@ -1363,7 +1389,7 @@ async function buildWorld() {
   }
 
   // --- decorazioni specifiche
-  ({ island: decorIsland, canyon: decorCanyon, neon: decorNeon, ice: decorIce, volcano: decorVolcano })[M.decor]();
+  ({ island: decorIsland, canyon: decorCanyon, neon: decorNeon, ice: decorIce, volcano: decorVolcano, sky: decorSky })[M.decor]();
   setLoad(0.82); await tick();
 
   // --- nuvole
@@ -1395,6 +1421,29 @@ async function buildWorld() {
 }
 
 // ---------- ISOLA ----------
+function decorSky() {
+  // isole volanti: roccia a cono rovesciato con prato sopra
+  const rock = IM(new THREE.ConeGeometry(1, 1.6, 7).rotateX(Math.PI).translate(0, -0.8, 0), new THREE.MeshStandardMaterial({ color: 0x9a8fb0, roughness: 0.9, flatShading: true }), 90);
+  const lawn = IM(new THREE.CylinderGeometry(1, 1, 0.3, 7), new THREE.MeshStandardMaterial({ color: 0x86d86e, roughness: 0.8, flatShading: true }), 90);
+  const treeG = IM(new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ color: 0x5cbf5a, roughness: 0.8, flatShading: true }), 200);
+  for (let t = 0; t < 600 && !rock.full; t++) {
+    const x = rand(IC.x - IRX, IC.x + IRX), z = rand(IC.y - IRZ, IC.y + IRZ);
+    if (nearestGlobal(x, z, WALL + 30, 1)) continue;
+    const y = rand(-20, 110), r = rand(6, 24);
+    rock.put(x, y, z, r, r * 1.3, r, rand(0, 6)); lawn.put(x, y + 0.15, z, r, 1, r, rand(0, 6));
+    for (let k = 0; k < 3; k++) { const a = rand(0, 6.28), d = rand(0, r * 0.7), sc = rand(1.5, 3.5); treeG.put(x + Math.cos(a) * d, y + sc, z + Math.sin(a) * d, sc, sc * 1.4, sc); }
+  }
+  // castello su una piattaforma accanto al traguardo
+  const i = wrapI(-40), lat = -(WALL + 60 + XW[i]), cx = P[i].x + SD[i].x * lat, cz = P[i].z + SD[i].z * lat, cy = P[i].y - 6;
+  const stone = new THREE.MeshStandardMaterial({ color: 0xf2ecff, roughness: 0.7 }), roofM = new THREE.MeshStandardMaterial({ color: 0x7a5cff, roughness: 0.5 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(42, 30, 12, 10), stone); base.position.set(cx, cy, cz); world.add(base);
+  const under = new THREE.Mesh(new THREE.ConeGeometry(30, 50, 10).rotateX(Math.PI), new THREE.MeshStandardMaterial({ color: 0x9a8fb0, roughness: 0.9, flatShading: true })); under.position.set(cx, cy - 31, cz); world.add(under);
+  const keep = new THREE.Mesh(new THREE.BoxGeometry(26, 34, 26), stone); keep.position.set(cx, cy + 23, cz); keep.castShadow = true; world.add(keep);
+  for (const [dx, dz, h] of [[-26, -26, 46], [26, -26, 40], [-26, 26, 40], [26, 26, 52], [0, 0, 64]]) {
+    const tw = new THREE.Mesh(new THREE.CylinderGeometry(6, 6.5, h, 12), stone); tw.position.set(cx + dx, cy + 6 + h / 2, cz + dz); tw.castShadow = true; world.add(tw);
+    const rf = new THREE.Mesh(new THREE.ConeGeometry(8, 14, 12), roofM); rf.position.set(cx + dx, cy + 6 + h + 7, cz + dz); world.add(rf);
+  }
+}
 function decorIsland() {
   const trunkG = new THREE.CylinderGeometry(0.35, 0.55, 1, 7); trunkG.translate(0, 0.5, 0);
   const roundG = new THREE.IcosahedronGeometry(1, 1);
@@ -3644,6 +3693,7 @@ const CUPS = [
   { id: 'sole', name: 'Coppa Sole', emoji: '☀️', maps: ['island', 'canyon', 'ice'] },
   { id: 'luna', name: 'Coppa Luna', emoji: '🌙', maps: ['neon', 'volcano', 'island'] },
   { id: 'stella', name: 'Coppa Stella', emoji: '⭐', maps: ['island', 'canyon', 'neon', 'ice', 'volcano'] },
+  { id: 'fulmine', name: 'Coppa Fulmine', emoji: '⚡', maps: ['otto', 'jungle', 'sky'] },
 ];
 const PTS = [15, 12, 10, 8, 6, 4, 2, 1];
 G.mode = 'single'; G.cupId = 'sole'; G.gp = null;

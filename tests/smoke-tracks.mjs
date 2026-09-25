@@ -39,8 +39,8 @@ try {
   // --- ponti: coppie di punti vicini in pianta ma a quote diverse
   const br = await ev(`(() => {
     const g = window.__game, P = g.P, N = g.N, B = g.BRIDGE; if (!B.some(v => v)) return null;
-    let best = null;
-    for (let i = 0; i < N; i += 2) { if (!B[i]) continue; for (let j = 0; j < N; j += 2) { if (B[j]) continue; const d = Math.hypot(P[i].x - P[j].x, P[i].z - P[j].z); if (d < 6 && (!best || d < best.d)) best = { i, j, d }; } }
+    let best = null; // i = tratto alto, j = tratto basso: vicini in pianta, lontani lungo la pista
+    for (let i = 0; i < N; i += 2) { if (!B[i]) continue; for (let j = 0; j < N; j += 2) { const di = Math.min(Math.abs(i - j), N - Math.abs(i - j)); if (di < 60 || P[i].y - P[j].y < 5) continue; const d = Math.hypot(P[i].x - P[j].x, P[i].z - P[j].z); if (d < 6 && (!best || d < best.d)) best = { i, j, d }; } }
     if (!best) return { none: true };
     const x = P[best.i].x, z = P[best.i].z;
     const up = g.groundInfo(x, z, best.i, {}), lo = g.groundInfo(x, z, best.j, {});
