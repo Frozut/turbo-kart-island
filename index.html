@@ -2643,6 +2643,27 @@ const qMat = new THREE.SpriteMaterial({ map: texQ, depthWrite: false });
 const coinGeo = new THREE.CylinderGeometry(0.85, 0.85, 0.2, 28).rotateX(Math.PI / 2);
 const coinMat = new THREE.MeshStandardMaterial({ color: 0xffc800, metalness: 1, roughness: 0.22, emissive: 0x6a4300, emissiveIntensity: 0.6 });
 
+// dopo ogni rampa del deltaplano: monete e scatole oggetto lungo la traiettoria di planata (velocità tipica 55 m/s)
+function placeAirItems() {
+  for (const R of RAMPS) {
+    if (!R.glide) continue;
+    const v = 72, vy0 = v * R.h / R.len + 5, tA = vy0 / 12, y0 = P[R.idx].y + R.h; // v: velocità dopo la pedana turbo che precede la rampa
+    const yAt = t => t < tA ? y0 + vy0 * t - 6 * t * t : y0 + vy0 * tA - 6 * tA * tA - 6 * (t - tA);
+    // in volo si va dritti dalla rampa: oggetti su quella linea, tenuti dentro i bordi della pista sottostante
+    const r0 = P[R.idx], t0 = T[R.idx], s0 = SD[R.idx], gi = {};
+    const at = (t, lat, dy) => {
+      const d = R.len / 2 + v * t, x = r0.x + t0.x * d + s0.x * (R.lat + lat), z = r0.z + t0.z * d + s0.z * (R.lat + lat);
+      const g = groundInfo(x, z, stepI(R.idx, Math.round(d / SP)), gi), i = g.idx, cl = clamp(g.lat, -hw(i) + 2, hw(i) - 2), y = yAt(t) + dy;
+      return y > P[i].y + 3 ? new THREE.Vector3(P[i].x + SD[i].x * cl, y, P[i].z + SD[i].z * cl) : null;
+    };
+    for (let t = 0.5; t < 3.4; t += 0.32) { const pos = at(t, 0, 1.0); if (!pos) continue; const m = new THREE.Object3D(); m.position.copy(pos); coins.push({ m, pos, active: true, t: 0, air: true }); }
+    for (const lat of [-6, 0, 6]) {
+      const pos = at(tA * 0.95, lat, 1.6); if (!pos) continue;
+      const g = new THREE.Group(); g.add(new THREE.Mesh(boxGeo, boxMat)); const q = new THREE.Sprite(qMat); q.scale.set(1.5, 1.5, 1); g.add(q);
+      g.position.copy(pos); world.add(g); boxes.push({ g, m: g.children[0], pos, active: true, t: 0, ph: rand(0, 6), air: true });
+    }
+  }
+}
 function placeGameObjects() {
   const M = MAP;
   for (const f of M.boxes) {
@@ -2667,8 +2688,6 @@ function placeGameObjects() {
       coins.push({ m, pos, active: true, t: 0 });
     }
   }
-  const cim = new THREE.InstancedMesh(coinGeo, coinMat, Math.max(1, coins.length)); cim.castShadow = true; cim.frustumCulled = false; world.add(cim);
-  anim.coinIM = cim;
   const padMat = new THREE.MeshStandardMaterial({ map: texBoost, emissive: 0xffffff, emissiveMap: texBoost, emissiveIntensity: 0.9, roughness: 0.4 });
   for (const [f, lat] of M.pads) {
     const i = Math.floor(N * f);
@@ -2699,6 +2718,10 @@ function placeGameObjects() {
     ramp.rotation.order = 'YXZ'; ramp.rotation.y = ANG[best]; ramp.rotation.x = Math.atan(SLOPE[best]) * -1;
     ramp.castShadow = true; ramp.receiveShadow = true; world.add(ramp);
   }
+  placeAirItems();
+  // monete (anche quelle in aria): un'unica InstancedMesh
+  const cim = new THREE.InstancedMesh(coinGeo, coinMat, Math.max(1, coins.length)); cim.castShadow = true; cim.frustumCulled = false; world.add(cim);
+  anim.coinIM = cim;
   placeHazards();
 }
 
@@ -3000,9 +3023,9 @@ class Kart {
     let top = cc.max * st.speed * (1 + this.coins * 0.012) * this.rubber;
     if (this.starT > 0) top *= 1.12;
     if (this.shrinkT > 0) top *= 0.7;
-    const offroad = !this.onRoad && this.starT <= 0 && this.boostT <= 0;
+    const offroad = !this.onRoad && this.grounded && this.starT <= 0 && this.boostT <= 0; // in volo (deltaplano, salti) nessuna penalità
     if (offroad) top *= 0.45;
-    else if (this.gidx >= N && this.starT <= 0 && this.boostT <= 0 && pathOf(this.gidx)?.kind === 'offroad') top *= 0.85;
+    else if (this.gidx >= N && this.grounded && this.starT <= 0 && this.boostT <= 0 && pathOf(this.gidx)?.kind === 'offroad') top *= 0.85;
     if (this.boostT > 0) top = Math.max(top, cc.max * st.speed * 1.4);
     if (this.bulletT > 0) { top = cc.max * st.speed * 1.5; this.speed = lerp(this.speed, top, 1 - Math.exp(-4 * dt)); }
     const accel = cc.accel * st.accel;
@@ -3019,29 +3042,32 @@ class Kart {
       if (this.speed > top) this.speed = Math.max(top, this.speed - 40 * dt);
     }
     // sterzo: filtro passa-basso sull'input, velocità di rotazione dipendente dalla velocità
-    this.steerIn = lerp(this.steerIn, stunned ? 0 : clamp(inp.steer || 0, -1, 1), 1 - Math.exp(-11 * dt));
+    this.steerIn = lerp(this.steerIn, stunned ? 0 : clamp(inp.steer || 0, -1, 1), 1 - Math.exp(-16 * dt));
     const s = this.steerIn;
     const spd = Math.abs(this.speed);
     if (this.drifting) {
       const d = this.driftDir, k = clamp(s * d, -1, 1);
-      this.yaw -= d * (0.8 + 0.5 * k) * st.handling * dt * (this.grounded ? 1 : 0.7);
+      this.yaw -= d * (0.95 + 0.6 * k) * st.handling * dt * (this.grounded ? 1 : 0.7);
       const prev = this.sparkLevel;
-      if (this.grounded) this.charge += dt * (0.8 + 0.6 * Math.max(0, k));
-      this.sparkLevel = this.charge >= 3.1 ? 3 : this.charge >= 1.9 ? 2 : this.charge >= 0.85 ? 1 : 0;
+      if (this.grounded) this.charge += dt * (0.9 + 0.7 * Math.max(0, k));
+      this.sparkLevel = this.charge >= 2.7 ? 3 : this.charge >= 1.6 ? 2 : this.charge >= 0.75 ? 1 : 0;
       if (this.sparkLevel > prev && this.isPlayer) sfx.spark(this.sparkLevel);
-      if (!inp.drift || spd < 12 || stunned) this.endDrift(!stunned);
+      if (!inp.drift || spd < 10 || stunned) this.endDrift(!stunned);
     } else {
-      const rate = st.handling * smooth(0, 9, spd) * lerp(1.6, 1.18, clamp(spd / cc.max, 0, 1)) * (this.boostT > 0 ? 0.92 : 1);
+      const rate = st.handling * smooth(0, 9, spd) * lerp(2.0, 1.45, clamp(spd / cc.max, 0, 1)) * (this.boostT > 0 ? 0.92 : 1);
       this.yaw -= s * rate * dt * (this.speed < 0 ? -1 : 1) * (this.grounded ? 1 : this.gliding ? 0.6 : 0.35);
       if (inp.driftPressed && this.grounded && !stunned && spd > 8) {
         this.vy = 5.5; this.grounded = false; this.hopping = true; if (this.isPlayer) sfx.hop();
+      } else if (this.hopBuf > 0 && this.grounded && !stunned && inp.drift && Math.abs(inp.steer || 0) > 0.25 && spd > 10) {
+        this.drifting = true; this.driftDir = Math.sign(inp.steer); this.charge = 0; this.sparkLevel = 0; this.hopBuf = 0;
       }
+      this.hopBuf = Math.max(0, (this.hopBuf || 0) - dt);
     }
     if (inp.driftPressed && this.rampAir && !this.trick && this.airT < 0.5) { this.trick = true; this.trickT = 0.45; if (this.isPlayer) sfx.trick(); }
     this.steerVis = lerp(this.steerVis, s, 1 - Math.exp(-12 * dt));
 
     // movimento: la direzione di marcia insegue il muso (aderenza per mappa → scivolate sul ghiaccio)
-    const grip = (this.drifting ? 5.5 : 11) * (MAP.grip ?? 1) * (this.grounded ? 1 : 0.25) * (this.starT > 0 ? 1.4 : 1);
+    const grip = (this.drifting ? 5.5 : 13) * (MAP.grip ?? 1) * (this.grounded ? 1 : 0.25) * (this.starT > 0 ? 1.4 : 1);
     this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 1 - Math.exp(-grip * dt));
     if (Math.abs(wrapA(this.yaw - this.moveYaw)) > 1.1) this.moveYaw = this.yaw - Math.sign(wrapA(this.yaw - this.moveYaw)) * 1.1;
     if (stunned) this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 0.02);
@@ -3060,9 +3086,12 @@ class Kart {
       const sg = Math.sign(g.lat), over = alat - WALL, sd = SD[g.idx];
       this.pos.x -= sd.x * sg * over; this.pos.z -= sd.z * sg * over;
       const into = (fx * sd.x + fz * sd.z) * sg * Math.sign(this.speed);
-      if (into > 0.15) { this.speed *= 1 - 0.55 * into; this.yaw = lerpAngle(this.yaw, ANG[g.idx] + (this.speed < 0 ? Math.PI : 0), 0.35); this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 0.6); }
-      this.ext.x -= sd.x * sg * 5; this.ext.z -= sd.z * sg * 5;
-      if (this.isPlayer && this.bumpCd <= 0 && Math.abs(this.speed) > 10) { sfx.bump(); this.bumpCd = 0.4; G.shake = Math.max(G.shake, 0.25); }
+      // in volo (deltaplano, salti) il muro riallinea il kart senza rallentarlo né farlo rimbalzare
+      if (into > 0.15) { if (this.grounded) this.speed *= 1 - 0.55 * into; this.yaw = lerpAngle(this.yaw, ANG[g.idx] + (this.speed < 0 ? Math.PI : 0), this.grounded ? 0.35 : 0.2); this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 0.6); }
+      if (this.grounded) {
+        this.ext.x -= sd.x * sg * 5; this.ext.z -= sd.z * sg * 5;
+        if (this.isPlayer && this.bumpCd <= 0 && Math.abs(this.speed) > 10) { sfx.bump(); this.bumpCd = 0.4; G.shake = Math.max(G.shake, 0.25); }
+      }
     }
     // verticale
     const h = g.h;
@@ -3110,7 +3139,8 @@ class Kart {
     this.grounded = true; this.vy = 0; this.gliding = false;
     if (this.hopping) {
       this.hopping = false;
-      if (inp.drift && Math.abs(inp.steer || 0) > 0.25 && Math.abs(this.speed) > 12 && this.spinT <= 0) { this.drifting = true; this.driftDir = Math.sign(inp.steer); this.charge = 0; this.sparkLevel = 0; }
+      this.hopBuf = inp.drift ? 0.4 : 0; // se non sterzi ancora, hai 0,4 s per farlo
+      if (inp.drift && Math.abs(inp.steer || 0) > 0.25 && Math.abs(this.speed) > 10 && this.spinT <= 0) { this.hopBuf = 0; this.drifting = true; this.driftDir = Math.sign(inp.steer); this.charge = 0; this.sparkLevel = 0; }
     }
     if (this.rampAir) { this.rampAir = false; if (this.trick) { this.trick = false; this.boost(0.9, TRICK_COLS); } }
     if (this.isPlayer && this.airT > 0.3) { G.shake = Math.max(G.shake, 0.2); for (let k = 0; k < 20; k++) SMOKE.emit(this.pos.x + rand(-1.5, 1.5), this.pos.y + 0.3, this.pos.z + rand(-1.5, 1.5), rand(-4, 4), rand(1, 3), rand(-4, 4), C(0xd9d0c0), 1.6, 0.7, 0, 2); }
@@ -3364,7 +3394,7 @@ function readInput() {
   let kt = 0;
   if (keyDown('left')) kt -= 1;
   if (keyDown('right')) kt += 1;
-  const rate = kt !== 0 && kt * kbSteer >= 0 ? 3.4 : 7;
+  const rate = kt !== 0 && kt * kbSteer >= 0 ? 6 : 10;
   kbSteer = kt === 0 && Math.abs(kbSteer) < rate * dt ? 0 : clamp(kbSteer + Math.sign(kt - kbSteer) * Math.min(Math.abs(kt - kbSteer), rate * dt), -1, 1);
   let steer = kbSteer;
   let throttle = keyDown('throttle'), brake = keyDown('brake');
@@ -4097,7 +4127,7 @@ function updateRaceObjects(dt) {
     for (const b of boxes) {
       if (!b.active) continue;
       const dx = k.pos.x - b.g.position.x, dz = k.pos.z - b.g.position.z, dy = k.pos.y + 1 - b.g.position.y;
-      if (dx * dx + dz * dz < 7 && Math.abs(dy) < 3) {
+      if (dx * dx + dz * dz < (b.air ? 30 : 7) && Math.abs(dy) < (b.air ? 5 : 3)) {
         b.active = false; b.g.visible = false; b.t = 2.5;
         for (let q = 0; q < 30; q++) FX.emit(b.g.position.x, b.g.position.y, b.g.position.z, rand(-10, 10), rand(-2, 12), rand(-10, 10), _hsl.setHSL(Math.random(), 1, 0.6), rand(0.4, 0.9), rand(0.4, 0.8), 18);
         if (!k.remote && !k.item && k.roulette <= 0) { k.pending = rollItem(k.rank, G.karts.length); k.roulette = k.isPlayer ? 1.6 : 1.0; }
@@ -4107,7 +4137,7 @@ function updateRaceObjects(dt) {
     for (const c of coins) {
       if (!c.active) continue;
       const dx = k.pos.x - c.m.position.x, dz = k.pos.z - c.m.position.z;
-      if (dx * dx + dz * dz < 5 && Math.abs(k.pos.y + 1 - c.m.position.y) < 2.5) {
+      if (dx * dx + dz * dz < (c.air ? 25 : 5) && Math.abs(k.pos.y + 1 - c.m.position.y) < (c.air ? 5 : 2.5)) {
         c.active = false; c.m.visible = false; c.t = 15; if (!k.remote) k.coins = Math.min(10, k.coins + 1);
         if (k.isPlayer) { sfx.coin(); for (let q = 0; q < 10; q++) FX.emit(c.m.position.x, c.m.position.y, c.m.position.z, rand(-4, 4), rand(2, 6), rand(-4, 4), C(0xffe066), 0.5, 0.4, 10); }
       }
@@ -4723,7 +4753,7 @@ setInterval(() => {
     if (jc) { $('netCode').value = jc.toUpperCase(); show('online'); }
   } catch (e) { console.error(e); window.dispatchEvent(new ErrorEvent('error', { message: e.stack || String(e) })); }
 })();
-window.__game = { aheadIdx, groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; }, get BRIDGE() { return BRIDGE; }, get BR() { return BR; }, get GAP() { return GAP; } };
+window.__game = { aheadIdx, groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; }, get BRIDGE() { return BRIDGE; }, get BR() { return BR; }, get GAP() { return GAP; }, get coins() { return coins; }, get boxes() { return boxes; } };
 </script>
 </body>
 </html>

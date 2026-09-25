@@ -66,11 +66,13 @@ try {
   // --- deltaplano
   const R = await ev(`(() => { const r = window.__game.RAMPS.find(r => r.glide); return [r.idx, r.lat]; })()`);
   await key('KeyW', 'keydown');
-  await ev(`(() => { const p = window.__game.G.player; __place(p, (${R[0]} - 25 + window.__game.N) % window.__game.N, ${R[1]}, p.cfg.max); return true; })()`);
+  await ev(`(() => { const p = window.__game.G.player; p.coins = 0; p.item = null; p.roulette = 0; __place(p, (${R[0]} - 25 + window.__game.N) % window.__game.N, ${R[1]}, p.cfg.max); p.invulnT = 8; window.__game.G.autopilot = true; return true; })()`);
   const glided = await until(`window.__game.G.player.gliding`, 4000);
   check('deltaplano aperto', glided);
   await sleep(500); await shot('mk-glide.png');
   check('deltaplano chiuso all\'atterraggio', await until(`!window.__game.G.player.gliding && window.__game.G.player.grounded`, 12000));
+  check('in volo raccoglie monete/oggetti', await ev(`(() => { const p = window.__game.G.player; return p.coins > 0 || !!p.item || p.roulette > 0; })()`), await ev(`(() => { const p = window.__game.G.player; return 'monete ' + p.coins + ', oggetto ' + (p.item || (p.roulette > 0 ? 'in estrazione' : '-')); })()`));
+  await ev(`window.__game.G.autopilot = false, true`);
   await key('KeyW', 'keyup');
 
   // --- scia: rettilineo, un bot 10 m davanti
