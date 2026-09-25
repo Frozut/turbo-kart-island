@@ -1461,6 +1461,7 @@ const C = hex => { let c = colCache.get(hex); if (!c) colCache.set(hex, c = new 
 const SPARK_COLS = [C(0xfff2c0), C(0x3fb6ff), C(0xff8a1a), C(0xd05bff)];
 const FLAME = [C(0xffd24a), C(0xff7a1a), C(0xff3d00)];
 const BOOST_BLUE = [C(0x6fd0ff), C(0x2a8cff), C(0xffffff)], BOOST_PURPLE = [C(0xe07bff), C(0xa040ff), C(0xff66cc)], TRICK_COLS = [C(0x9ffcff), C(0x4fe0ff), C(0xffffff)];
+const DRAFT_COLS = [C(0xffffff), C(0xbfefff), C(0x8fdcff)];
 const _hsl = new THREE.Color(), _v = new THREE.Vector3();
 
 // =====================================================================
@@ -2608,6 +2609,7 @@ class Kart {
     this.lean = 0; this.pitch = 0; this.steerVis = 0; this.wrongT = 0; this.lapStart = 0; this.lapTimes = []; this.bestLap = Infinity; this.bumpCd = 0;
     this.gi = { idx: 0, lat: 0, h: 0, roadY: 0, al: 0 };
     this.moveYaw = this.yaw; this.steerIn = 0;
+    this.draftT = 0; this.draftCd = 0;
     this.netPos = this.pos.clone(); this.netYaw = this.yaw; this.netT = 0; this.netSeen = performance.now();
     this.pos.y = groundInfo(this.pos.x, this.pos.z, idx, this.gi).h;
     this.netPos.y = this.pos.y;
@@ -2773,6 +2775,12 @@ class Kart {
       this.vy -= 36 * dt; this.pos.y += this.vy * dt;
       if (this.pos.y <= h) { this.pos.y = h; this.land(inp); }
     }
+    // scia: dietro a un kart per 1,4 s → turbo
+    if (this.draftCd > 0) { this.draftCd -= dt; this.draftT = 0; }
+    else if (this.grounded && this.speed > 0.6 * cc.max && draftTarget(this.pos.x, this.pos.z, this.yaw, G.karts, this) >= 0) {
+      this.draftT += dt;
+      if (this.draftT >= 1.4) { this.boost(1.2, DRAFT_COLS); this.draftT = 0; this.draftCd = 1; }
+    } else this.draftT = Math.max(0, this.draftT - 2 * dt);
     // pads
     for (const p of pads) {
       const dx = this.pos.x - p.pos.x, dz = this.pos.z - p.pos.z;
@@ -2869,6 +2877,12 @@ class Kart {
         FX.emit(x, y, z, -fx * 6 + rand(-0.8, 0.8), rand(0, 1), -fz * 6 + rand(-0.8, 0.8), this.boostCol[Math.floor(Math.random() * this.boostCol.length)], rand(0.35, 0.55), rand(0.06, 0.12), -2, -0.4);
       }
     }
+    if (this.isPlayer && this.draftT > 0.3) {
+      for (let k = 0; k < 2; k++) {
+        const [x, y, z] = wp(rand(-1.8, 1.8), rand(0.4, 1.8), rand(1, 3));
+        FX.emit(x, y, z, -fx * 30, 0, -fz * 30, DRAFT_COLS[0], 0.25, 0.12, 0);
+      }
+    }
     if (!this.onRoad && this.grounded && Math.abs(this.speed) > 10 && Math.random() < 0.7) {
       const [x, y, z] = wp(rand(-1, 1), 0.2, -1.3);
       SMOKE.emit(x, y, z, rand(-2, 2), rand(1, 3), rand(-2, 2), C(0xb99b6b), 1.3, 0.6, 0, 2);
@@ -2899,6 +2913,8 @@ function aiInput(k, dt) {
     const bx = b.pos.x - (P[ti].x + SD[ti].x * off), bz = b.pos.z - (P[ti].z + SD[ti].z * off);
     if (bx * bx + bz * bz < 16) off += (b.pos.x - P[ti].x) * SD[ti].x + (b.pos.z - P[ti].z) * SD[ti].z > off ? -5 : 5;
   }
+  // rettilineo: mettiti in scia al kart davanti
+  if (Math.abs(wrapA(ANG[wrapI(k.idx + 30)] - ANG[k.idx])) < 0.15) { const j = draftTarget(k.pos.x, k.pos.z, k.yaw, G.karts, k, 25); if (j >= 0) off = lerp(off, G.karts[j].lat, 0.7); }
   off = clamp(off, -HW + 2, HW - 2);
   const tx = P[ti].x + SD[ti].x * off, tz = P[ti].z + SD[ti].z * off;
   const desired = Math.atan2(tx - k.pos.x, tz - k.pos.z);
