@@ -661,10 +661,15 @@ let MAP = null, TS = 1.45, WL = -2.3, LEN = 0, N = 0, SP = 1;
 let P = [], T = [], SD = [], ANG = new Float32Array(0), SLOPE = new Float32Array(0);
 let minX, maxX, minZ, maxZ, IC = new THREE.Vector2(), IRX = 1, IRZ = 1, LAKE = null, MOUNTS = [], BLEND = [HW + 7, HW + 75];
 let RAMPS = [];
+// larghezza variabile: XW[i] = mezza larghezza extra rispetto a HW (negativa nelle strettoie)
+let XW = new Float32Array(0), XWMAX = 0;
+const hw = i => HW + XW[i];
+// sposta una distanza laterale "standard" (misurata come se la strada fosse larga HW) sul bordo reale
+const edgeLat = (i, lat) => lat + Math.sign(lat) * XW[i];
 let OPEN_L = new Uint8Array(0), OPEN_R = new Uint8Array(0), LIQUID = false;
 const isOpen = (i, lat) => (lat < 0 ? OPEN_L : OPEN_R)[i] === 1;
 // dirupo oltre il bordo dei tratti aperti
-const openDrop = (i, lat) => isOpen(i, lat) ? -40 * smooth(HW + 4, HW + 16, Math.abs(lat)) : 0;
+const openDrop = (i, lat) => isOpen(i, lat) ? -40 * smooth(HW + 4, HW + 16, Math.abs(lat) - XW[i]) : 0;
 const wrapI = i => ((i % N) + N) % N;
 const GC = 30, grid = new Map();
 const gkey = (ix, iz) => (ix + 2000) * 4000 + (iz + 2000);
@@ -682,6 +687,11 @@ function setupTrack(map) {
     ANG[i] = Math.atan2(t.x, t.z);
   }
   for (let i = 0; i < N; i++) SLOPE[i] = (P[(i + 1) % N].y - P[i].y) / SP;
+  XW = new Float32Array(N); XWMAX = 0;
+  if (map.cp.some(c => c[3] != null)) {
+    const cw = new THREE.CatmullRomCurve3(map.cp.map(c => new THREE.Vector3(c[0] * TS, clamp(c[3] ?? HW, 7, 22), c[2] * TS)), true, 'centripetal');
+    for (let i = 0; i < N; i++) { XW[i] = clamp(cw.getPoint(curve.getUtoTmapping(i / N)).y, 7, 22) - HW; XWMAX = Math.max(XWMAX, XW[i]); }
+  }
   minX = 1e9; maxX = -1e9; minZ = 1e9; maxZ = -1e9;
   for (const p of P) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
   IC.set((minX + maxX) / 2, (minZ + maxZ) / 2);
@@ -752,14 +762,15 @@ function autoLayout(map) {
     });
   }
 }
+// punto di pista più vicino; d = distanza dal centro meno la larghezza extra (cioè riferita a una strada larga HW)
 function nearestGlobal(x, z, maxR) {
-  const r = Math.ceil(maxR / GC), cx = Math.floor(x / GC), cz = Math.floor(z / GC);
-  let best = -1, bd = maxR * maxR;
+  const r = Math.ceil((maxR + XWMAX) / GC), cx = Math.floor(x / GC), cz = Math.floor(z / GC);
+  let best = -1, bd = maxR;
   for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) {
     const arr = grid.get(gkey(cx + a, cz + b)); if (!arr) continue;
-    for (const i of arr) { const dx = x - P[i].x, dz = z - P[i].z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = i; } }
+    for (const i of arr) { const dx = x - P[i].x, dz = z - P[i].z, d = Math.sqrt(dx * dx + dz * dz) - XW[i]; if (d < bd) { bd = d; best = i; } }
   }
-  return best < 0 ? null : { i: best, d: Math.sqrt(bd) };
+  return best < 0 ? null : { i: best, d: bd };
 }
 
 const baseNoise = (x, z) => 5 * Math.sin(x * 0.012 + 0.5) * Math.cos(z * 0.010) + 3.2 * Math.sin(x * 0.027 + 1.3) * Math.sin(z * 0.023 + 0.7)
@@ -816,7 +827,7 @@ function groundInfo(x, z, hint, out = _gi) {
   const dx = x - p.x, dz = z - p.z;
   const lat = dx * sd.x + dz * sd.z, al = dx * t.x + dz * t.z;
   const roadY = p.y + al * SLOPE[best];
-  let h = blendH(roadY, Math.abs(lat), x, z) + openDrop(best, lat);
+  let h = blendH(roadY, Math.abs(lat) - XW[best], x, z) + openDrop(best, lat);
   let onRamp = null;
   for (const R of RAMPS) {
     let di = best - R.idx; if (di > N / 2) di -= N; if (di < -N / 2) di += N;
@@ -943,7 +954,7 @@ function scatterArea(tries, clear, cb, spread = 1.05) {
 // punti casuali ai bordi della pista
 function scatterRoad(tries, latMin, latMax, cb) {
   for (let t = 0; t < tries; t++) {
-    const i = Math.floor(rand(0, N)), s = Math.random() < 0.5 ? -1 : 1, lat = s * rand(latMin, latMax);
+    const i = Math.floor(rand(0, N)), s = Math.random() < 0.5 ? -1 : 1, lat = s * (rand(latMin, latMax) + XW[i]);
     const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat;
     const nr = nearestGlobal(x, z, latMin); if (nr && nr.d < latMin - 0.01) continue;
     if (cb(x, z, terrainY(x, z), i, lat) === false) return;
@@ -955,8 +966,10 @@ function ribbon(a, b, yOff, vLen, mat, yFn) {
   const reps = Math.max(1, Math.round(LEN / vLen));
   for (let i = 0; i <= N; i++) {
     const j = i % N, p = P[j], s = SD[j];
-    const ya = yFn ? yFn(j, a) : p.y, yb = yFn ? yFn(j, b) : p.y;
-    pos.push(p.x + s.x * a, ya + yOff, p.z + s.z * a, p.x + s.x * b, yb + yOff, p.z + s.z * b);
+    // i bordi (|lat| >= HW) seguono la larghezza variabile
+    const ea = Math.abs(a) >= HW - 1e-6 ? edgeLat(j, a) : a, eb = Math.abs(b) >= HW - 1e-6 ? edgeLat(j, b) : b;
+    const ya = yFn ? yFn(j, ea) : p.y, yb = yFn ? yFn(j, eb) : p.y;
+    pos.push(p.x + s.x * ea, ya + yOff, p.z + s.z * ea, p.x + s.x * eb, yb + yOff, p.z + s.z * eb);
     const v = i / N * reps; uv.push(0, v, 1, v);
     if (i < N) { const k = i * 2; idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3); }
   }
@@ -970,7 +983,7 @@ function ribbon(a, b, yOff, vLen, mat, yFn) {
 function skirt(lat, mat) {
   const pos = [], idx = [];
   for (let i = 0; i <= N; i++) {
-    const j = i % N, p = P[j], s = SD[j], x = p.x + s.x * lat, z = p.z + s.z * lat;
+    const j = i % N, p = P[j], s = SD[j], el = edgeLat(j, lat), x = p.x + s.x * el, z = p.z + s.z * el;
     pos.push(x, p.y + 0.05, z, x, Math.min(p.y - 0.3, naturalH(x, z) - 1), z);
     if (i < N) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
   }
@@ -1061,11 +1074,11 @@ async function buildWorld() {
     const pil = IM(new THREE.CylinderGeometry(1.3, 1.6, 1, 10).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0x3a3a48, roughness: 0.7 }), 400);
     for (let i = 0; i < N; i += 12) {
       if (P[i].y < 2.5) continue;
-      for (const lat of [-HW + 3, HW - 3]) { const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, g0 = naturalH(x, z); pil.put(x, g0, z, 1, P[i].y - g0, 1); }
+      for (const lat of [-hw(i) + 3, hw(i) - 3]) { const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, g0 = naturalH(x, z); pil.put(x, g0, z, 1, P[i].y - g0, 1); }
     }
   }
   // linea del traguardo
-  const sl = new THREE.Mesh(new THREE.PlaneGeometry(HW * 2, 3.2), new THREE.MeshStandardMaterial({ map: texChecker, roughness: 0.6 }));
+  const sl = new THREE.Mesh(new THREE.PlaneGeometry(hw(0) * 2, 3.2), new THREE.MeshStandardMaterial({ map: texChecker, roughness: 0.6 }));
   sl.rotation.x = -Math.PI / 2; const slg = new THREE.Group(); slg.add(sl); slg.position.copy(P[0]).setY(P[0].y + 0.07); slg.rotation.y = ANG[0]; sl.receiveShadow = true; world.add(slg);
   setLoad(0.15); await tick();
 
@@ -1125,7 +1138,7 @@ async function buildWorld() {
   const posts = new THREE.InstancedMesh(postG, new THREE.MeshStandardMaterial({ color: M.fence.post, roughness: 0.6 }), segs.length * 2);
   const rails = new THREE.InstancedMesh(railG, glow ? new THREE.MeshBasicMaterial({ color: 0xffffff }) : new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }), segs.length * 4);
   let pi = 0, ri = 0; const red = new THREE.Color(M.fence.cols[0]), wht = new THREE.Color(M.fence.cols[1]);
-  const fenceP = (i, s) => { const lat = s * (WALL + 0.8); const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat; return new THREE.Vector3(x, blendH(P[i].y, WALL + 0.8, x, z), z); };
+  const fenceP = (i, s) => { const lat = s * (WALL + 0.8 + XW[i]); const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat; return new THREE.Vector3(x, blendH(P[i].y, WALL + 0.8, x, z), z); };
   for (const i of segs) for (const s of [-1, 1]) {
     if (isOpen(i, s)) continue;
     const a = fenceP(i, s), b = fenceP((i + 4) % N, s);
@@ -1143,9 +1156,9 @@ async function buildWorld() {
   const archMat = new THREE.MeshStandardMaterial({ color: M.arch, roughness: 0.4, metalness: 0.6 });
   const texBanner = PM(makeBannerTex(M.banner, M.name.toUpperCase()));
   const arch = new THREE.Group();
-  for (const s of [-1, 1]) { const pil = new THREE.Mesh(new RoundedBoxGeometry(1.6, 13, 1.6, 2, 0.3), archMat); pil.position.set(s * (HW + 3), 6.5, 0); pil.castShadow = true; arch.add(pil); }
+  for (const s of [-1, 1]) { const pil = new THREE.Mesh(new RoundedBoxGeometry(1.6, 13, 1.6, 2, 0.3), archMat); pil.position.set(s * (hw(0) + 3), 6.5, 0); pil.castShadow = true; arch.add(pil); }
   const bannerMat = new THREE.MeshStandardMaterial({ map: texBanner, emissive: 0xffffff, emissiveMap: texBanner, emissiveIntensity: glow ? 0.8 : 0.25 });
-  const beam = new THREE.Mesh(new RoundedBoxGeometry(HW * 2 + 8, 3, 1.2, 2, 0.3), [archMat, archMat, archMat, archMat, bannerMat, bannerMat]);
+  const beam = new THREE.Mesh(new RoundedBoxGeometry(hw(0) * 2 + 8, 3, 1.2, 2, 0.3), [archMat, archMat, archMat, archMat, bannerMat, bannerMat]);
   beam.position.y = 12.5; beam.castShadow = true; arch.add(beam);
   const lampBox = new THREE.Mesh(new RoundedBoxGeometry(6, 1.8, 1, 2, 0.3), archMat); lampBox.position.set(0, 10.1, -0.2); arch.add(lampBox);
   for (let k = 0; k < 3; k++) {
@@ -1155,7 +1168,7 @@ async function buildWorld() {
   arch.position.copy(P[0]); arch.rotation.y = ANG[0]; world.add(arch);
 
   // --- tribune
-  const gsIdx = wrapI(-22), gsLat = -(WALL + 5);
+  const gsIdx = wrapI(-22), gsLat = -(WALL + 5 + XW[gsIdx]);
   const gs = new THREE.Group(); const gsLen = 70;
   const stepMat = new THREE.MeshStandardMaterial({ color: 0xdfe3ea, roughness: 0.7 });
   for (let s = 0; s < 5; s++) { const b = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1 * (s + 1) + 6, gsLen), stepMat); b.position.set(-s * 2.2, 0.55 * (s + 1) - 3, 0); b.castShadow = b.receiveShadow = true; gs.add(b); }
@@ -1181,7 +1194,7 @@ async function buildWorld() {
   for (let k = -8; k <= 12; k++) {
     if (k === 0) continue;
     const i = wrapI(k * 9);
-    const x = P[i].x + SD[i].x * sideLat, z = P[i].z + SD[i].z * sideLat, y = M.deck ? P[i].y : blendH(P[i].y, sideLat, x, z);
+    const sl = sideLat + XW[i], x = P[i].x + SD[i].x * sl, z = P[i].z + SD[i].z * sl, y = M.deck ? P[i].y : blendH(P[i].y, sideLat, x, z);
     flagPoles.put(x, y + 3.5, z);
     const fm = new THREE.Mesh(flagGeo, new THREE.MeshStandardMaterial({ color: flagCols[(k + 20) % flagCols.length], side: THREE.DoubleSide, roughness: 0.6 }));
     fm.position.set(x, y + 6.2, z); fm.castShadow = true; world.add(fm); anim.flags.push({ m: fm, ph: rand(0, 6) });
@@ -1200,7 +1213,7 @@ async function buildWorld() {
       lastSign = i;
       const s = a < 0 ? 1 : -1; // esterno curva
       for (const off of [-14, 0, 14]) {
-        const j = wrapI(i + off), lat = s * signLat;
+        const j = wrapI(i + off), lat = s * (signLat + XW[j]);
         const x = P[j].x + SD[j].x * lat, z = P[j].z + SD[j].z * lat, y = M.deck ? P[j].y : blendH(P[j].y, signLat, x, z);
         const ry = ANG[j] + Math.PI, cr = Math.cos(ry), sr = Math.sin(ry);
         boards.put(x, y + 2.6, z, a > 0 ? -1 : 1, 1, 1, ry);
@@ -1290,13 +1303,13 @@ function decorCanyon() {
   const archMat = new THREE.MeshStandardMaterial({ color: 0xb05a2c, roughness: 0.95, flatShading: true });
   for (const f of [0.23, 0.69]) {
     const i = Math.floor(N * f);
-    const a = new THREE.Mesh(new THREE.TorusGeometry(WALL + 3, 3.4, 7, 22, Math.PI), archMat);
+    const a = new THREE.Mesh(new THREE.TorusGeometry(WALL + 3 + XW[i], 3.4, 7, 22, Math.PI), archMat);
     a.position.set(P[i].x, P[i].y - 1.5, P[i].z); a.rotation.y = ANG[i]; a.castShadow = true; a.receiveShadow = true; world.add(a);
   }
   // teschio di mucca... versione cartello
   const signTex = PM(canvasTex(256, 128, (g, w, h) => { g.fillStyle = '#8a5a34'; g.fillRect(0, 0, w, h); g.strokeStyle = '#5a3a1e'; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, h - 8); g.font = '900 44px "Luckiest Guy", Impact'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#ffe8b0'; g.fillText('PERICOLO', w / 2, h / 2 - 16); g.font = '900 26px "Luckiest Guy", Impact'; g.fillText('MASSI!', w / 2, h / 2 + 26); }, false));
   for (const hz of MAP.hazards) {
-    const i = wrapI(Math.floor(N * hz.f) - 40), lat = WALL + 1.5, x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, y = terrainY(x, z);
+    const i = wrapI(Math.floor(N * hz.f) - 40), lat = WALL + 1.5 + XW[i], x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, y = terrainY(x, z);
     const g = new THREE.Group(); const b = new THREE.Mesh(new THREE.PlaneGeometry(4, 2), new THREE.MeshStandardMaterial({ map: signTex, side: THREE.DoubleSide })); b.position.y = 2.6; g.add(b);
     const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.6), new THREE.MeshStandardMaterial({ color: 0x5a3a1e })); leg.position.y = 1.3; g.add(leg);
     g.position.set(x, y, z); g.rotation.y = ANG[i] + Math.PI; world.add(g);
@@ -1331,7 +1344,7 @@ function decorNeon() {
   const poles = IM(new THREE.CylinderGeometry(0.14, 0.2, 7, 6).translate(0, 3.5, 0), new THREE.MeshStandardMaterial({ color: 0x20202a, metalness: 0.6, roughness: 0.4 }), 400);
   const heads = IM(new THREE.SphereGeometry(0.5, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe6a8 }), 400, false);
   for (let i = 0; i < N; i += 18) for (const s of [-1, 1]) {
-    const lat = s * (WALL + 0.2), x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, y = P[i].y;
+    const lat = s * (WALL + 0.2 + XW[i]), x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, y = P[i].y;
     poles.put(x, y, z); heads.put(x - SD[i].x * s * 0.4, y + 7.1, z - SD[i].z * s * 0.4);
   }
   // archi al neon sopra la strada
@@ -1340,15 +1353,15 @@ function decorNeon() {
   let ac = 0;
   for (let i = 30; i < N - 30; i += Math.floor(N / 11)) {
     const m = new THREE.Mesh(arcG, new THREE.MeshBasicMaterial({ color: neonCols[ac++ % neonCols.length] }));
-    m.position.copy(P[i]); m.rotation.y = ANG[i]; world.add(m);
-    const m2 = new THREE.Mesh(arcG, m.material); m2.position.copy(P[wrapI(i + 5)]); m2.rotation.y = ANG[wrapI(i + 5)]; m2.scale.setScalar(0.94); world.add(m2);
+    m.position.copy(P[i]); m.rotation.y = ANG[i]; m.scale.setScalar(hw(i) / HW); world.add(m);
+    const m2 = new THREE.Mesh(arcG, m.material); m2.position.copy(P[wrapI(i + 5)]); m2.rotation.y = ANG[wrapI(i + 5)]; m2.scale.setScalar(0.94 * hw(wrapI(i + 5)) / HW); world.add(m2);
   }
   // cartelloni pubblicitari
   const ads = [['TURBO', '#ff2fd0', '#1a0030'], ['NEON', '#27f3ff', '#001a2a'], ['⚡ KART ⚡', '#ffd000', '#2a1a00'], ['GO!', '#7aff5a', '#00220a'], ['2077', '#ff7a1a', '#220a00'], ['DRIFT', '#27f3ff', '#1a0030']];
   for (let k = 0; k < 12; k++) {
     const [txt, fg, bg] = ads[k % ads.length];
     const tex = PM(canvasTex(512, 256, (g, w, h) => { g.fillStyle = bg; g.fillRect(0, 0, w, h); g.strokeStyle = fg; g.lineWidth = 14; g.strokeRect(10, 10, w - 20, h - 20); g.font = '900 120px "Luckiest Guy", Impact'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.shadowColor = fg; g.shadowBlur = 30; g.fillStyle = fg; g.fillText(txt, w / 2, h / 2 + 8); }, false));
-    const i = Math.floor((k + 0.5) / 12 * N), s = k % 2 ? 1 : -1, lat = s * (WALL + 9);
+    const i = Math.floor((k + 0.5) / 12 * N), s = k % 2 ? 1 : -1, lat = s * (WALL + 9 + XW[i]);
     const x = P[i].x + SD[i].x * lat, z = P[i].z + SD[i].z * lat, y = Math.max(P[i].y, naturalH(x, z));
     const g = new THREE.Group();
     const board = new THREE.Mesh(new THREE.PlaneGeometry(16, 8), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })); board.position.y = 14; g.add(board);
@@ -2445,7 +2458,8 @@ function placeGameObjects() {
   const M = MAP;
   for (const f of M.boxes) {
     const i = Math.floor(N * f);
-    for (const lat of [-8, -4, 0, 4, 8]) {
+    for (const lat0 of [-8, -4, 0, 4, 8]) {
+      const lat = lat0 * hw(i) / HW;
       const g = new THREE.Group();
       const m = new THREE.Mesh(boxGeo, boxMat); g.add(m);
       const s = new THREE.Sprite(qMat); s.scale.set(1.5, 1.5, 1); g.add(s);
@@ -2457,7 +2471,7 @@ function placeGameObjects() {
   for (const [f, lat0, dl] of M.coins) {
     const i0 = Math.floor(N * f);
     for (let k = 0; k < 6; k++) {
-      const i = wrapI(i0 + k * 4), lat = clamp(lat0 + dl * k * 4, -HW + 1.5, HW - 1.5);
+      const i = wrapI(i0 + k * 4), lat = clamp(lat0 + dl * k * 4, -hw(i) + 1.5, hw(i) - 1.5);
       const m = new THREE.Object3D(); // solo trasformazione: si disegnano tutte in un'unica InstancedMesh
       const pos = new THREE.Vector3(P[i].x + SD[i].x * lat, P[i].y + 1.2, P[i].z + SD[i].z * lat);
       m.position.copy(pos);
@@ -2539,14 +2553,14 @@ function updateHazards(dt) {
     const i = H.i, p = P[i], sd = SD[i];
     if (H.type === 'roller') {
       const prev = H.cur;
-      H.cur = Math.sin(t * H.spd * 2.2 + H.ph * 6.28) * (WALL - 2.5);
+      H.cur = Math.sin(t * H.spd * 2.2 + H.ph * 6.28) * (WALL - 2.5 + XW[i]);
       H.x = p.x + sd.x * H.cur; H.z = p.z + sd.z * H.cur; H.y = p.y + H.r * 0.92;
       H.mesh.position.set(H.x, H.y, H.z);
       H.mesh.rotation.y = ANG[i];
       H.mesh.rotation.z -= (H.cur - prev) / H.r;
       H.active = true;
     } else if (H.type === 'car') {
-      const u = ((t * H.spd + H.ph) % 1 + 1) % 1, span = WALL + 34;
+      const u = ((t * H.spd + H.ph) % 1 + 1) % 1, span = WALL + 34 + XW[i];
       H.cur = (u * 2 - 1) * span * H.dir;
       H.x = p.x + sd.x * H.cur; H.z = p.z + sd.z * H.cur; H.y = p.y;
       H.mesh.position.set(H.x, H.y, H.z);
@@ -2847,10 +2861,11 @@ class Kart {
     const prevIdx = this.idx;
     const g = groundInfo(this.pos.x, this.pos.z, this.idx, this.gi);
     this.idx = g.idx; this.lat = g.lat;
-    this.onRoad = Math.abs(g.lat) < HW + 2;
+    const alat = Math.abs(g.lat) - XW[g.idx]; // distanza laterale riferita a una strada larga HW
+    this.onRoad = alat < HW + 2;
     // barriere
-    if (Math.abs(g.lat) > WALL && !isOpen(g.idx, g.lat)) {
-      const sg = Math.sign(g.lat), over = Math.abs(g.lat) - WALL, sd = SD[g.idx];
+    if (alat > WALL && !isOpen(g.idx, g.lat)) {
+      const sg = Math.sign(g.lat), over = alat - WALL, sd = SD[g.idx];
       this.pos.x -= sd.x * sg * over; this.pos.z -= sd.z * sg * over;
       const into = (fx * sd.x + fz * sd.z) * sg * Math.sign(this.speed);
       if (into > 0.15) { this.speed *= 1 - 0.55 * into; this.yaw = lerpAngle(this.yaw, ANG[g.idx] + (this.speed < 0 ? Math.PI : 0), 0.35); this.moveYaw = lerpAngle(this.moveYaw, this.yaw, 0.6); }
@@ -2875,7 +2890,7 @@ class Kart {
       this.pos.y += this.vy * dt;
       if (this.pos.y <= h) { this.pos.y = h; this.land(inp); }
     }
-    if (this.grounded && Math.abs(g.lat) < HW) this.safeIdx = this.idx;
+    if (this.grounded && alat < HW) this.safeIdx = this.idx;
     if (isFallen(this.pos.y, g.roadY, WL, LIQUID)) this.startRespawn();
     // scia: dietro a un kart per 1,4 s → turbo
     if (this.draftCd > 0) { this.draftCd -= dt; this.draftT = 0; }
@@ -3054,7 +3069,7 @@ function aiInput(k, dt) {
   }
   // rettilineo: mettiti in scia al kart davanti
   if (Math.abs(wrapA(ANG[wrapI(k.idx + 30)] - ANG[k.idx])) < 0.15) { const j = draftTarget(k.pos.x, k.pos.z, k.yaw, G.karts, k, 25); if (j >= 0) off = lerp(off, G.karts[j].lat, 0.7); }
-  off = clamp(off, -HW + 2, HW - 2);
+  off = clamp(off, -hw(ti) + 2, hw(ti) - 2);
   const tx = P[ti].x + SD[ti].x * off, tz = P[ti].z + SD[ti].z * off;
   const desired = Math.atan2(tx - k.pos.x, tz - k.pos.z);
   const diff = wrapA(desired - k.yaw);
@@ -3947,8 +3962,8 @@ function updateRaceObjects(dt) {
     s.pos.x += s.dir.x * s.speed * dt; s.pos.z += s.dir.y * s.speed * dt;
     const g = groundInfo(s.pos.x, s.pos.z, s.idx, s.gi || (s.gi = {})); s.idx = g.idx;
     s.pos.y = g.h + 0.8;
-    if (Math.abs(g.lat) > WALL - 0.8) {
-      const sg = Math.sign(g.lat), sd = SD[g.idx], over = Math.abs(g.lat) - (WALL - 0.8);
+    if (Math.abs(g.lat) - XW[g.idx] > WALL - 0.8) {
+      const sg = Math.sign(g.lat), sd = SD[g.idx], over = Math.abs(g.lat) - XW[g.idx] - (WALL - 0.8);
       s.pos.x -= sd.x * sg * over; s.pos.z -= sd.z * sg * over;
       const dn = s.dir.x * sd.x * sg + s.dir.y * sd.z * sg;
       if (dn > 0) { s.dir.x -= 2 * dn * sd.x * sg; s.dir.y -= 2 * dn * sd.z * sg; s.bounces++; }
@@ -4491,7 +4506,7 @@ setInterval(() => {
     if (jc) { $('netCode').value = jc.toUpperCase(); show('online'); }
   } catch (e) { console.error(e); window.dispatchEvent(new ErrorEvent('error', { message: e.stack || String(e) })); }
 })();
-window.__game = { groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; } };
+window.__game = { groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; }, get XW() { return XW; } };
 </script>
 </body>
 </html>
