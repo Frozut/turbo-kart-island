@@ -3901,9 +3901,12 @@ function frame(now) {
 
   switch (G.state) {
     case 'title': {
-      const i = Math.floor(G.time * 14) % N, p = P[i], q = P[wrapI(i + 50)];
-      camera.position.lerp(_v.set(p.x + SD[i].x * 34, p.y + 16, p.z + SD[i].z * 34), 0.05);
-      camera.lookAt(q.x, q.y + 2, q.z); placeSun(p.x, p.y, p.z);
+      // interpolo tra due punti della pista: a scatti di un punto camera e ombre tremavano 14 volte al secondo
+      const f = G.time * 14, i = Math.floor(f) % N, t = f - Math.floor(f), j = wrapI(i + 1);
+      const pa = P[i], pb = P[j], qa = P[wrapI(i + 50)], qb = P[wrapI(i + 51)];
+      const px = lerp(pa.x, pb.x, t), py = lerp(pa.y, pb.y, t), pz = lerp(pa.z, pb.z, t);
+      camera.position.lerp(_v.set(px + lerp(SD[i].x, SD[j].x, t) * 34, py + 16, pz + lerp(SD[i].z, SD[j].z, t) * 34), 0.05);
+      camera.lookAt(lerp(qa.x, qb.x, t), lerp(qa.y, qb.y, t) + 2, lerp(qa.z, qb.z, t)); placeSun(px, py, pz);
       if (camera.fov !== 60) { camera.fov = 60; camera.updateProjectionMatrix(); }
       break;
     }
