@@ -2324,7 +2324,7 @@ function animKart(k, dt, v) {
   if (hk !== v.heldKind) {
     v.heldKind = hk;
     if (hk && !v.heldObjs) { // creati una sola volta per kart, poi solo mostrati/nascosti
-      const b = new THREE.Mesh(bananaGeo, bananaMat); b.rotation.z = Math.PI * 0.95; b.scale.setScalar(0.9);
+      const b = new THREE.Mesh(bananaGeo, bananaMat); b.position.y = -0.5; b.scale.setScalar(0.75);
       const shell = type => { const g = new THREE.Group(), s = new THREE.Mesh(shellGeo, shellMat[type]); s.scale.setScalar(0.8); g.add(s); const r = new THREE.Mesh(ringGeo, MAT.white); r.rotation.x = Math.PI / 2; r.scale.setScalar(0.8); g.add(r); return g; };
       v.heldObjs = { banana: b, green: shell('green'), red: shell('red') };
       for (const x of Object.values(v.heldObjs)) v.held.add(x);
@@ -2582,8 +2582,32 @@ function rollItem(rank, n) {
   for (const [id, w] of tbl) { r -= w; if (r <= 0) return id; }
   return tbl[0][0];
 }
-const bananaGeo = new THREE.TorusGeometry(0.55, 0.2, 8, 16, Math.PI * 1.1);
-const bananaMat = new THREE.MeshStandardMaterial({ color: 0xffe135, roughness: 0.45, emissive: 0x332a00 });
+// buccia di banana: polpa curva in piedi, tre lembi di buccia aperti a terra, picciolo scuro (un'unica geometria a colori per vertice)
+const bananaGeo = (() => {
+  const paint = (g, hex) => { const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3); for (let i = 0; i < n; i++) c.toArray(a, i * 3); g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g; };
+  const parts = [];
+  const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0.12, 0), new THREE.Vector3(-0.32, 0.72, 0), new THREE.Vector3(0.1, 1.18, 0));
+  const body = new THREE.TubeGeometry(curve, 16, 0.19, 10);
+  // assottiglia la punta: raggio che cala nell'ultimo terzo
+  const bp = body.attributes.position, tmp = new THREE.Vector3();
+  for (let i = 0; i < bp.count; i++) {
+    const seg = Math.floor(i / 11) / 16, c = curve.getPoint(seg);
+    tmp.fromBufferAttribute(bp, i).sub(c).multiplyScalar(seg > 0.66 ? 1 - (seg - 0.66) * 1.6 : 1).add(c); bp.setXYZ(i, tmp.x, tmp.y, tmp.z);
+  }
+  body.computeVertexNormals();
+  parts.push(paint(body, 0xfff3b0));
+  for (let k = 0; k < 3; k++) {
+    const pe = new THREE.SphereGeometry(1, 12, 8); pe.scale(0.27, 0.06, 0.62);
+    pe.translate(0, 0, 0.55); pe.rotateX(0.2 + (k === 1 ? 0.1 : 0)); pe.rotateY(k * Math.PI * 2 / 3 + 0.5); pe.translate(0, 0.22, 0);
+    parts.push(paint(pe, k === 1 ? 0xffc81a : 0xffd83a));
+    const sp = new THREE.SphereGeometry(0.08, 6, 4); sp.scale(1, 0.5, 1); sp.translate(0, 0.05, 0.98); sp.rotateX(0.2 + (k === 1 ? 0.1 : 0)); sp.rotateY(k * Math.PI * 2 / 3 + 0.5); sp.translate(0, 0.22, 0); // macchiolina marrone sulla punta del lembo
+    parts.push(paint(sp, 0x6b4a1a));
+  }
+  const base = new THREE.SphereGeometry(0.24, 10, 8); base.scale(1, 0.7, 1); base.translate(0, 0.18, 0); parts.push(paint(base, 0xffd21f));
+  const tip = new THREE.CylinderGeometry(0.045, 0.07, 0.2, 6); tip.rotateZ(-0.5); tip.translate(0.16, 1.24, 0); parts.push(paint(tip, 0x4a2e12));
+  return mergeGeometries(parts, false);
+})();
+const bananaMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, emissive: 0x1a1400 });
 const shellGeo = new THREE.SphereGeometry(0.75, 20, 14), ringGeo = new THREE.TorusGeometry(0.72, 0.13, 8, 24);
 const shellMat = { green: new THREE.MeshStandardMaterial({ color: 0x1ed760, roughness: 0.25, metalness: 0.2, emissive: 0x0a5a20, emissiveIntensity: 0.6 }), red: new THREE.MeshStandardMaterial({ color: 0xff2a2a, roughness: 0.25, metalness: 0.2, emissive: 0x801010, emissiveIntensity: 0.9 }),
   blue: new THREE.MeshStandardMaterial({ color: 0x2a6bff, roughness: 0.25, metalness: 0.2, emissive: 0x1030a0, emissiveIntensity: 0.9 }),
@@ -3764,9 +3788,9 @@ function spawnProjectile(d) {
   const owner = kartById(d.o) || null;
   if (owner && owner.an) owner.an.throwT = 0.45;
   if (d.k === 'banana') {
-    const m = getProj('banana'); m.rotation.z = Math.PI * 0.95;
+    const m = getProj('banana');
     const p = new THREE.Vector3(d.x, 0, d.z);
-    const gi = groundInfo(p.x, p.z, d.i ?? -1, {}); p.y = gi.h + 0.55; m.position.copy(p); m.rotation.y = d.ry || 0;
+    const gi = groundInfo(p.x, p.z, d.i ?? -1, {}); p.y = gi.h + 0.02; m.position.copy(p); m.rotation.y = d.ry || 0;
     // lancio ad arco dalla mano del pilota fino a terra
     const from = owner ? new THREE.Vector3(owner.pos.x, owner.pos.y + 1.6, owner.pos.z) : p.clone();
     m.position.copy(from);
@@ -3894,7 +3918,7 @@ function updateRaceObjects(dt) {
     if (b.fly) {
       b.fly.t += dt; const q = Math.min(1, b.fly.t / 0.38);
       b.m.position.lerpVectors(b.fly.from, b.pos, q); b.m.position.y += Math.sin(q * Math.PI) * 2.2; b.m.rotation.x += dt * 14;
-      if (q >= 1) { b.fly = null; b.m.position.copy(b.pos); b.m.rotation.x = 0; for (let n = 0; n < 8; n++) SMOKE.emit(b.pos.x, b.pos.y - 0.4, b.pos.z, rand(-2, 2), rand(0.5, 2), rand(-2, 2), C(0xd9d0c0), 0.6, 0.4, 0, 1.5); }
+      if (q >= 1) { b.fly = null; b.m.position.copy(b.pos); b.m.rotation.x = 0; for (let n = 0; n < 8; n++) SMOKE.emit(b.pos.x, b.pos.y + 0.1, b.pos.z, rand(-2, 2), rand(0.5, 2), rand(-2, 2), C(0xd9d0c0), 0.6, 0.4, 0, 1.5); }
       continue;
     }
     for (const k of ks) {
