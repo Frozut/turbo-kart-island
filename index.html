@@ -4491,7 +4491,7 @@ setInterval(() => {
     if (jc) { $('netCode').value = jc.toUpperCase(); show('online'); }
   } catch (e) { console.error(e); window.dispatchEvent(new ErrorEvent('error', { message: e.stack || String(e) })); }
 })();
-window.__game = { G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; } };
+window.__game = { groundInfo, terrainY, G, renderer, get P() { return P; }, get N() { return N; }, CCS, camera, scene, MAPS, NET, ensureMap, setupTrack, HW, get SD() { return SD; }, get ANG() { return ANG; }, get RAMPS() { return RAMPS; }, get OPEN_L() { return OPEN_L; }, get OPEN_R() { return OPEN_R; } };
 </script>
 </body>
 </html>
