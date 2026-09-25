@@ -42,8 +42,8 @@ try {
   const use = it => ev(`(() => { const p = window.__game.G.player; p.invulnT = 0; p.item = '${it}'; p.itemCount = 1; p.roulette = 0; p.useItem(); return true; })()`);
   await use('blue'); await sleep(300);
   check('sfera blu lanciata', await ev(`window.__game.G.shells.some(s => s.type === 'blue')`));
-  await use('fire'); await sleep(200);
-  check('fiore: palla di fuoco', await ev(`window.__game.G.shells.some(s => s.type === 'fire') && window.__game.G.player.fireT > 0`));
+  // controllo nello stesso istante del lancio: in griglia la palla può colpire subito il kart davanti
+  check('fiore: palla di fuoco', await ev(`(() => { const G = window.__game.G, p = G.player; p.item = 'fire'; p.itemCount = 1; p.roulette = 0; p.useItem(); return G.shells.some(s => s.type === 'fire') && p.fireT > 0; })()`));
   await use('gold'); await sleep(200);
   check('fungo dorato attivo', await ev(`window.__game.G.player.goldT > 0 && window.__game.G.player.boostT > 0`));
   await use('bolt'); await sleep(300);
