@@ -171,6 +171,9 @@
   .ofull { grid-column: 1 / -1; }
   .okey { font: 900 15px 'Nunito', sans-serif; color: #222; background: #fff; border: 0; border-radius: 8px; padding: 7px 0; cursor: pointer; box-shadow: 0 2px 0 #999; }
   .okey.wait { background: #ffd000; }
+  /* dove sei col telefono: azzurro pulsante, distinto dal giallo della selezione */
+  .padfocus { outline: 4px solid #fff !important; outline-offset: 4px; animation: padPulse .9s ease-in-out infinite alternate; }
+  @keyframes padPulse { from { box-shadow: 0 0 0 6px rgba(39,243,255,.55), 0 0 18px rgba(39,243,255,.5); } to { box-shadow: 0 0 0 11px rgba(39,243,255,.25), 0 0 30px rgba(39,243,255,.9); } }
   #fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; z-index: 12; transition: opacity .35s; }
   #fps { position: fixed; left: 24px; top: 136px; z-index: 25; font: 900 14px 'Nunito', monospace; color: #7aff5a; background: rgba(0,0,0,.45); padding: 3px 8px; border-radius: 8px; pointer-events: none; }
 </style>
@@ -3149,7 +3152,7 @@ function readInput() {
   }
   if (NET.pads.size && now - PAD.last < 1500) {
     const ps = shapeAxis(PAD.s, 0.06, PAD.gyro ? 1.25 : 1.5); if (ps !== 0) steer = ps;
-    throttle = throttle || PAD.th; brake = brake || PAD.br; drift = drift || PAD.dr; item = item || PAD.it;
+    throttle = throttle || PAD.th || (PAD.auto && !PAD.br && (G.state === 'race' || (G.state === 'countdown' && G.phaseT >= 1.9))); brake = brake || PAD.br; drift = drift || PAD.dr; item = item || PAD.it;
     padMenu();
   }
   const inp = { steer: clamp(steer * SETTINGS.game.steerSens, -1, 1), throttle, brake, drift, driftPressed: drift && !prevDrift, itemPressed: item && !prevItem };
@@ -3223,10 +3226,11 @@ function onIncoming(conn) {
 }
 // ---- telefono controller ----
 function attachPad(conn) {
-  conn.on('open', () => { NET.pads.add(conn); conn.send({ t: 'hi', map: MAP ? MAP.name : '' }); updatePadUI(); netToast('📱 Telefono collegato!'); });
+  conn.on('open', () => { NET.pads.add(conn); conn.send({ t: 'hi', map: MAP ? MAP.name : '' }); padMenuSent = null; updatePadUI(); netToast('📱 Telefono collegato!'); });
   conn.on('data', d => {
+    if (d && d.t === 'nav') { padNav(String(d.d)); return; }
     if (!d || d.t !== 'in') return;
-    PAD.s = clamp(+d.s || 0, -1, 1); PAD.th = !!d.th; PAD.br = !!d.br; PAD.dr = !!d.dr; PAD.it = !!d.it; PAD.ps = !!d.ps; PAD.gyro = !!d.g;
+    PAD.s = clamp(+d.s || 0, -1, 1); PAD.th = !!d.th; PAD.br = !!d.br; PAD.dr = !!d.dr; PAD.it = !!d.it; PAD.ps = !!d.ps; PAD.gyro = !!d.g; PAD.auto = !!d.au;
     PAD.last = performance.now();
   });
   const bye = () => { if (NET.pads.delete(conn)) { updatePadUI(); netToast('📱 Telefono scollegato'); } };
@@ -4379,6 +4383,85 @@ $('btnOptions').onclick = openOptions;
 $('btnPauseOpt').onclick = openOptions;
 $('btnOptOk').onclick = closeOptions;
 $('btnOptReset').onclick = () => { SETTINGS[OPT.tab] = cloneJSON(SETTINGS_DEFAULT[OPT.tab]); OPT.capture = null; saveSettings(); applySettings(); renderOptions(); };
+
+// =====================================================================
+//  TELEFONO: navigazione dei menu (frecce, OK, INDIETRO)
+// =====================================================================
+// schermate in ordine di priorità (la prima visibile riceve la navigazione) e pulsante di partenza
+const NAV_SCREENS = [['options', 'btnOptOk'], ['online', 'btnHost'], ['phone', 'btnPhoneOk'], ['pause', 'btnResume'], ['podium', 'btnPodiumOk'], ['results', 'btnAgain'], ['select', 'btnStart'], ['title', 'btnPlay']];
+const NAV_SEL = 'button, .card, .cc, .mapc, .mode, .cup, .otab, .ochoice, input[type=range], input[type=checkbox]';
+const NAV = { el: null, c: null, idx: 0 };
+const vis = e => !!(e && !e.hidden && e.getClientRects().length);
+const padIsMenu = () => G.paused || !!G.pauseMenu || OPT.open || vis($('online')) || vis($('phone')) || !['race', 'countdown'].includes(G.state);
+function navContainer() { for (const [id, def] of NAV_SCREENS) { const c = $(id); if (vis(c)) return [c, def]; } return [null, null]; }
+function navItems(c) { return [...c.querySelectorAll(NAV_SEL)].filter(e => vis(e) && !e.disabled && !e.classList.contains('okey')); }
+function navFocus(e, items) {
+  if (NAV.el) NAV.el.classList.remove('padfocus');
+  NAV.el = e || null;
+  if (!e) return;
+  e.classList.add('padfocus'); NAV.idx = Math.max(0, (items || []).indexOf(e));
+  e.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+// se la schermata è stata ridisegnata (es. schede opzioni) resta sulla stessa posizione
+function navEnsure() {
+  const [c, def] = navContainer(); if (!c) { navFocus(null); return null; }
+  const items = navItems(c); if (!items.length) { navFocus(null); return null; }
+  if (NAV.el && items.includes(NAV.el)) return items;
+  const keep = NAV.c === c && items[NAV.idx];
+  NAV.c = c;
+  navFocus(keep || items.find(e => e.id === def) || items.find(e => e.classList.contains('sel')) || items[0], items);
+  return null; // appena evidenziato: il primo tocco mostra solo dove sei
+}
+function navBack() {
+  if (OPT.open) return closeOptions();
+  if (vis($('online'))) return $('btnNetBack').click();
+  if (vis($('phone'))) return $('btnPhoneOk').click();
+  if (vis($('pause'))) return togglePause();
+  if (G.state === 'select') return $('btnBack').click();
+  if (G.state === 'results' && vis($('btnMenu'))) return $('btnMenu').click();
+}
+function padNav(d) {
+  audioInit();
+  if (d === 'pause') { if (['race', 'countdown', 'intro'].includes(G.state)) togglePause(); return; }
+  if (G.state === 'intro' && !vis($('pause'))) { if (d === 'ok' && G.phaseT > 0.5) G.phaseT = 99; return; }
+  if (d === 'back') { navBack(); return; }
+  const items = navEnsure(); if (!items) return;
+  const el = NAV.el;
+  if (d === 'ok') {
+    if (el.type === 'range') return;
+    el.click();
+    setTimeout(() => { if (!NAV.el || !NAV.el.isConnected || !vis(NAV.el)) { navFocus(null); navEnsure(); } }, 60);
+    return;
+  }
+  if (el.type === 'range' && (d === 'left' || d === 'right')) {
+    const st = (+el.max - +el.min) / 20;
+    el.value = clamp(+el.value + (d === 'right' ? st : -st), +el.min, +el.max); el.dispatchEvent(new Event('input')); return;
+  }
+  // spostamento spaziale: il più vicino nella direzione, penalizzando lo scarto laterale
+  const r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const dx = d === 'left' ? -1 : d === 'right' ? 1 : 0, dy = d === 'up' ? -1 : d === 'down' ? 1 : 0;
+  let best = null, bs = Infinity;
+  for (const e of items) {
+    if (e === el) continue;
+    const q = e.getBoundingClientRect(), ex = q.left + q.width / 2 - cx, ey = q.top + q.height / 2 - cy;
+    const along = ex * dx + ey * dy; if (along <= 4) continue;
+    const sc = along + Math.abs(dx ? ey : ex) * 2.5;
+    if (sc < bs) { bs = sc; best = e; }
+  }
+  if (best) { navFocus(best, items); sfx.tickR(); }
+}
+// dice ai telefoni se mostrare i comandi di guida o il telecomando dei menu
+let padMenuSent = null;
+setInterval(() => {
+  if (!NET.pads.size) return;
+  const m = padIsMenu();
+  if (m !== padMenuSent) {
+    padMenuSent = m;
+    for (const c of NET.pads) if (c.open) { try { c.send({ t: 'mode', menu: m }); } catch (e) {} }
+    if (!m) navFocus(null);
+  }
+  if (m && (!NAV.el || !vis(NAV.el))) navEnsure();
+}, 150);
 
 // =====================================================================
 //  BOOT

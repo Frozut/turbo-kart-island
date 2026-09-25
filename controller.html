@@ -66,6 +66,25 @@
   #pad.gyro #rightBtns { grid-template-rows: 1fr 1.4fr; }
   #pad.gyro #leftBtns { grid-template-rows: 1fr 1fr; }
   #pad.stick #area { grid-template-columns: 1fr 1fr; }
+  /* accelerazione automatica: niente ACCELERA, DRIFT grande in basso a portata di pollice */
+  #pad.auto .pb.acc { display: none; }
+  #pad.stick.auto #rightBtns { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1.6fr; grid-template-areas: "brk itm" "drf drf"; }
+  #pad.stick.auto #rightBtns .drf { grid-area: drf; }
+  #pad.stick.auto #rightBtns .itm { grid-area: itm; }
+  #pad.stick.auto #rightBtns .brk { grid-area: brk; font-size: 17px; }
+  #pad.gyro.auto #rightBtns { grid-template-rows: 1fr; }
+  /* telecomando dei menu */
+  #menuArea { display: none; grid-template-columns: 1fr 1fr; align-items: center; justify-items: center; gap: 12px; padding: 10px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  #pad.menu #area { display: none; }
+  #pad.menu #menuArea { display: grid; }
+  .dpad { display: grid; grid-template-columns: repeat(3, var(--d)); grid-template-rows: repeat(3, var(--d)); grid-template-areas: ". up ." "left . right" ". down ."; gap: 6px; --d: min(24vh, 96px); }
+  .dp { border: 0; border-radius: 18px; background: rgba(255,255,255,.14); color: #fff; font-size: calc(var(--d) * .38); box-shadow: 0 5px 0 rgba(0,0,0,.35); }
+  .dp[data-d=up] { grid-area: up; } .dp[data-d=down] { grid-area: down; } .dp[data-d=left] { grid-area: left; } .dp[data-d=right] { grid-area: right; }
+  .dp.down, .mb.down { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0,0,0,.35); filter: brightness(1.3); }
+  .mbtns { display: grid; gap: 14px; width: min(100%, 300px); }
+  .mb { height: min(30vh, 120px); border: 0; border-radius: 22px; color: #fff; font: 30px 'Luckiest Guy', sans-serif; letter-spacing: 1px; text-shadow: 0 2px 0 rgba(0,0,0,.35); box-shadow: 0 6px 0 rgba(0,0,0,.35), inset 0 -8px 0 rgba(0,0,0,.18); }
+  .mb.ok { background: linear-gradient(180deg,#44e36b,#10a33c); }
+  .mb.back { background: linear-gradient(180deg,#ff6b3d,#e5261f); height: min(20vh, 80px); font-size: 22px; }
   /* impostazioni */
   #settings { position: fixed; inset: 0; background: rgba(5,10,30,.8); backdrop-filter: blur(6px); display: grid; place-items: center; z-index: 5; }
   #settings .box { background: #14204a; border-radius: 20px; padding: 18px 22px; width: min(420px, 92vw); border: 2px solid var(--line); }
@@ -95,7 +114,7 @@
   </div>
   <div id="area">
     <div class="zone" id="leftZone">
-      <div id="stickZone" class="zone" style="position:absolute;inset:0"><div id="base"><div id="knob"></div></div><div class="hintz">LEVETTA · nei menu: scegli pilota</div></div>
+      <div id="stickZone" class="zone" style="position:absolute;inset:0"><div id="base"><div id="knob"></div></div><div class="hintz">LEVETTA · tocca ovunque in questa metà</div></div>
       <div class="btns" id="leftBtns">
         <button class="pb brk" data-k="br">FRENO<small>retro</small></button>
         <button class="pb itm" data-k="it">OGGETTO<small>usa</small></button>
@@ -111,6 +130,10 @@
       </div>
     </div>
   </div>
+  <div id="menuArea">
+    <div class="dpad"><button class="dp" data-d="up">▲</button><button class="dp" data-d="left">◀</button><button class="dp" data-d="right">▶</button><button class="dp" data-d="down">▼</button></div>
+    <div class="mbtns"><button class="mb ok" data-nav="ok">OK</button><button class="mb back" data-nav="back">◀ INDIETRO</button></div>
+  </div>
 </div>
 
 <div id="settings" hidden>
@@ -120,7 +143,7 @@
     <label>Inverti sterzo giroscopio <input type="checkbox" id="inv"></label>
     <label>Accelerazione automatica <input type="checkbox" id="auto"></label>
     <label>Vibrazione <input type="checkbox" id="vib" checked></label>
-    <div class="small">Nei menu: ACCELERA = conferma, levetta/volante = scegli pilota, OGGETTO = cambia pista (host).</div>
+    <div class="small">Nei menu il telefono diventa un telecomando: frecce per muoverti, OK per scegliere, INDIETRO per tornare. Con l'accelerazione automatica al via parte da solo al momento giusto.</div>
     <div style="text-align:center;margin-top:12px"><button class="btn" id="setOk">OK</button></div>
   </div>
 </div>
@@ -133,10 +156,10 @@
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const PREFIX = 'tki26-';
   const S = { s: 0, th: false, br: false, dr: false, it: false, ps: false };
-  const opt = { mode: 'stick', sens: 32, inv: false, auto: false, vib: true };
-  try { Object.assign(opt, JSON.parse(localStorage.getItem('tki-pad') || '{}')); } catch (e) {}
+  const opt = { mode: 'stick', sens: 32, inv: false, auto: true, vib: true, v: 2 };
+  try { const sv = JSON.parse(localStorage.getItem('tki-pad') || '{}'); if (sv.v !== 2) { delete sv.auto; sv.v = 2; } Object.assign(opt, sv); } catch (e) {}
   const saveOpt = () => { try { localStorage.setItem('tki-pad', JSON.stringify(opt)); } catch (e) {} };
-  let peer = null, conn = null, lastSent = '', lastT = 0, wakeLock = null;
+  let peer = null, conn = null, lastSent = '', lastT = 0, wakeLock = null, menu = true;
 
   const hash = (location.hash || '').replace('#', '').toUpperCase();
   $('code').value = hash;
@@ -168,6 +191,7 @@
         if (!d) return;
         if (d.t === 'rumble' && opt.vib && navigator.vibrate) navigator.vibrate(clamp(d.ms | 0, 10, 600));
         if (d.t === 'hi') $('status').textContent = 'Collegato' + (d.map ? ' · ' + d.map : '');
+        if (d.t === 'mode') { menu = !!d.menu; if (menu) { held.clear(); recount(); stickId = null; S.s = 0; resetKnob(); } applyPadClass(); send(true); }
       });
       conn.on('close', () => { setLive(false, 'Disconnesso — tocca ⚙ per riconnettere'); });
       conn.on('error', () => setLive(false, 'Errore di connessione'));
@@ -186,12 +210,13 @@
   // ---- modalità ----
   function setMode(m) {
     opt.mode = m; saveOpt();
-    $('pad').className = m;
+    applyPadClass();
     $('mStick').classList.toggle('on', m === 'stick'); $('mGyro').classList.toggle('on', m === 'gyro');
     document.querySelectorAll('.stickOnly').forEach(b => b.hidden = m !== 'stick');
     if (m === 'gyro') startGyro();
     S.s = 0; resetKnob();
   }
+  function applyPadClass() { $('pad').className = [opt.mode, opt.auto ? 'auto' : '', menu ? 'menu' : ''].join(' ').trim(); }
   $('mStick').onclick = () => setMode('stick');
   $('mGyro').onclick = () => setMode('gyro');
 
@@ -202,12 +227,23 @@
     for (const k of ['th', 'br', 'dr', 'it']) S[k] = on.has(k);
     document.querySelectorAll('.pb').forEach(b => b.classList.toggle('down', on.has(b.dataset.k)));
   }
-  document.querySelectorAll('.pb').forEach(b => {
+  document.querySelectorAll('.pb[data-k]').forEach(b => {
     b.addEventListener('pointerdown', e => { e.preventDefault(); b.setPointerCapture(e.pointerId); held.set(e.pointerId, b.dataset.k); recount(); if (opt.vib && navigator.vibrate) navigator.vibrate(12); send(true); });
     const up = e => { if (held.delete(e.pointerId)) { recount(); send(true); } };
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
   });
-  $('bPause').addEventListener('pointerdown', e => { e.preventDefault(); S.ps = true; send(true); setTimeout(() => { S.ps = false; send(true); }, 150); });
+  $('bPause').addEventListener('pointerdown', e => { e.preventDefault(); nav('pause'); });
+  // ---- telecomando dei menu: frecce con ripetizione se tenute premute ----
+  function nav(d) { if (conn && conn.open) { try { conn.send({ t: 'nav', d }); } catch (e) {} } if (opt.vib && navigator.vibrate) navigator.vibrate(10); }
+  document.querySelectorAll('[data-d], [data-nav]').forEach(b => {
+    const d = b.dataset.d || b.dataset.nav; let rep = null;
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault(); b.classList.add('down'); nav(d);
+      if (b.dataset.d) rep = setTimeout(function again() { nav(d); rep = setTimeout(again, 140); }, 380);
+    });
+    const up = () => { b.classList.remove('down'); clearTimeout(rep); rep = null; };
+    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('pointerleave', up);
+  });
 
   // ---- levetta ----
   const zone = $('stickZone'), base = $('base'), knob = $('knob');
@@ -261,13 +297,15 @@
 
   // ---- impostazioni ----
   $('bSet').onclick = () => { if (!conn || !conn.open) { $('pad').hidden = true; $('connect').hidden = false; document.body.classList.remove('live'); return; } $('sens').value = opt.sens; $('inv').checked = opt.inv; $('auto').checked = opt.auto; $('vib').checked = opt.vib; $('settings').hidden = false; };
-  $('setOk').onclick = () => { opt.sens = +$('sens').value; opt.inv = $('inv').checked; opt.auto = $('auto').checked; opt.vib = $('vib').checked; saveOpt(); $('settings').hidden = true; };
+  $('setOk').onclick = () => { opt.sens = +$('sens').value; opt.inv = $('inv').checked; opt.auto = $('auto').checked; opt.vib = $('vib').checked; saveOpt(); applyPadClass(); $('settings').hidden = true; };
 
   // ---- invio ----
   function send(force) {
     if (!conn || !conn.open) return;
     const now = performance.now();
-    const out = { t: 'in', s: Math.round(S.s * 100) / 100, th: S.th || (opt.auto && !S.br), br: S.br, dr: S.dr, it: S.it, ps: S.ps, g: opt.mode === 'gyro' };
+    // l'accelerazione automatica la calcola il PC (au): così al via non ingolfa il motore
+    const out = menu ? { t: 'in', s: 0, th: false, br: false, dr: false, it: false, ps: false, g: false, au: false }
+      : { t: 'in', s: Math.round(S.s * 100) / 100, th: S.th, br: S.br, dr: S.dr, it: S.it, ps: false, g: opt.mode === 'gyro', au: opt.auto };
     const key = JSON.stringify(out);
     if (!force && key === lastSent && now - lastT < 200) return;
     if (!force && now - lastT < 30) return;
